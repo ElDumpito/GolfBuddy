@@ -6,6 +6,9 @@ services:
     image: ghcr.io/eldumpito/golfbuddy:latest
     pull_policy: always
     container_name: golfbuddy
+    # Lets Claude's scoped NAS key check, update and restart this app (see the gate in ElDumpito/harwood-oracle).
+    labels:
+      - stashhouse.claude=manage
     environment:
       - PORT=8790
       # Needed to create an account. Left as "change-me", the server makes one up and prints it in the container log

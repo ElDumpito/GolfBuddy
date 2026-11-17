@@ -36,11 +36,26 @@ CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER
 CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, booking_id INTEGER, course_id INTEGER, course TEXT, played_on INTEGER,
   holes INTEGER DEFAULT 18, start_hole INTEGER DEFAULT 1, pars TEXT, created_by INTEGER, created INTEGER, deleted INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS scores (round_id INTEGER, user_id INTEGER, strokes TEXT, PRIMARY KEY(round_id, user_id));
+-- Answers from outside services (weather, drive times, places), kept until exp.
+CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT, exp INTEGER);
 CREATE INDEX IF NOT EXISTS bookings_tee ON bookings(tee_at);
 CREATE INDEX IF NOT EXISTS expenses_booking ON expenses(booking_id);
 `);
 
 const q = (sql) => db.prepare(sql);
+
+// Columns added after the first release. SQLite can add a column but not "add if missing",
+// so check first; this runs on every start and does nothing once the columns exist.
+function addColumns(table, cols) {
+  const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+  for (const [name, type] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+}
+addColumns('courses', [['website', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL'], ['info', 'TEXT']]);
+// home/phone are only used for the drive-time and wake-up call features, and only once the person fills them in.
+addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], ['home_lon', 'REAL'], ['arrive_mins', 'INTEGER DEFAULT 30'],
+  ['wake_ok', 'INTEGER DEFAULT 0'], ['tee', 'TEXT']]);
+// wake: NULL = automatic (on for tee times before 8 a.m.), 0 = off, 1 = on. wake_log: what the caller did, per person.
+addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT']]);
 const json = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
 // Courses the two of you have actually played, so the first bookings already know their address
@@ -59,6 +74,19 @@ if (!q("SELECT v FROM settings WHERE k='seeded'").get()) {
   q("INSERT INTO settings(k,v) VALUES('seeded','1')").run();
 }
 
+// Scorecards, tees, coordinates and notes researched for the courses above (server/course-data.json).
+// Filled into a course only where it has nothing yet, so anything edited in the app is kept.
+const COURSE_DATA = require('./course-data.json');
+for (const [name, d] of Object.entries(COURSE_DATA)) {
+  const c = q('SELECT * FROM courses WHERE name=?').get(name);
+  if (!c || c.info) continue;
+  const info = { tees: d.tees, holes: d.holes, notes: d.notes, source: d.source, built: d.built, par: d.par };
+  const pars = d.holes.length === 18 ? JSON.stringify(d.holes.map((h) => h.par)) : c.pars;
+  const vague = !c.address || !/\d/.test(c.address);
+  q('UPDATE courses SET website=?, lat=?, lon=?, info=?, pars=COALESCE(pars, ?), phone=COALESCE(NULLIF(phone, \'\'), ?), address=? WHERE id=?')
+    .run(d.website, d.lat, d.lon, JSON.stringify(info), pars, d.phone, vague ? d.address : c.address, c.id);
+}
+
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16);
   return salt.toString('hex') + ':' + crypto.scryptSync(pw, salt, 32).toString('hex');
@@ -71,19 +99,25 @@ function checkPassword(pw, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin };
+const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin, tee: u.tee || '' };
+// The private part of a profile: only ever sent to that person.
+const ownProfile = (u) => u && ({ ...pubUser(u), phone: u.phone || '', home: u.home || '', homeSet: u.home_lat != null, arriveMins: u.arrive_mins ?? 30, wakeOk: !!u.wake_ok });
 const bookingRow = (b) => b && ({
   id: b.id, courseId: b.course_id, course: b.course, address: b.address || '', teeAt: b.tee_at, players: b.players, holes: b.holes,
   bookerId: b.booker_id, confirmation: b.confirmation || '', total: b.total, deposit: b.deposit, cancelAt: b.cancel_at,
   notes: b.notes || '', source: b.source || '', status: b.status, createdBy: b.created_by, created: b.created, updated: b.updated,
+  wake: b.wake == null ? null : !!b.wake,
 });
 const expenseRow = (e) => ({ id: e.id, ts: e.ts, bookingId: e.booking_id, paidBy: e.paid_by, amount: e.amount, category: e.category,
   description: e.description || '', split: json(e.split, {}), auto: e.auto || null, createdBy: e.created_by });
 const courseRow = (c) => c && ({ id: c.id, name: c.name, address: c.address || '', phone: c.phone || '', cancelHours: c.cancel_hours,
-  bookUrl: c.book_url || '', pars: json(c.pars, null), notes: c.notes || '' });
+  bookUrl: c.book_url || '', pars: json(c.pars, null), notes: c.notes || '', website: c.website || '', lat: c.lat, lon: c.lon, info: json(c.info, null) });
 
 const api = {
-  raw: db, dataDir: DATA, hashPassword, checkPassword, pubUser,
+  raw: db, dataDir: DATA, hashPassword, checkPassword, pubUser, ownProfile,
+  cacheGet: (k) => { const r = q('SELECT v, exp FROM cache WHERE k=?').get(k); return r ? { v: json(r.v, null), exp: r.exp } : null; },
+  cacheSet: (k, v, exp) => q('INSERT INTO cache(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, exp=excluded.exp').run(k, JSON.stringify(v), exp),
+  cachePrune: () => q('DELETE FROM cache WHERE exp < ?').run(Date.now() - 30 * 86400000),
   getSetting: (k) => q('SELECT v FROM settings WHERE k=?').get(k)?.v,
   setSetting: (k, v) => q('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v)),
 
@@ -97,6 +131,8 @@ const api = {
     return api.userById(Number(r.lastInsertRowid));
   },
   setProfile: (id, name, venmo) => q('UPDATE users SET name=?, venmo=? WHERE id=?').run(name, venmo || null, id),
+  setTravel: (id, t) => q('UPDATE users SET phone=?, home=?, home_lat=?, home_lon=?, arrive_mins=?, wake_ok=?, tee=? WHERE id=?')
+    .run(t.phone || null, t.home || null, t.homeLat ?? null, t.homeLon ?? null, t.arriveMins, t.wakeOk ? 1 : 0, t.tee || null, id),
   setPassword: (id, pw) => q('UPDATE users SET pass=? WHERE id=?').run(hashPassword(pw), id),
   createSession(userId) {
     const token = crypto.randomBytes(32).toString('hex');
@@ -112,13 +148,14 @@ const api = {
   courseById: (id) => courseRow(q('SELECT * FROM courses WHERE id=?').get(id)),
   courseByName: (n) => courseRow(q('SELECT * FROM courses WHERE name=?').get(String(n || '').trim())),
   saveCourse(c) {
+    const info = c.info ? JSON.stringify(c.info) : null;
     if (c.id) {
-      q('UPDATE courses SET name=?, address=?, phone=?, cancel_hours=?, book_url=?, pars=?, notes=? WHERE id=?')
-        .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '', c.id);
+      q('UPDATE courses SET name=?, address=?, phone=?, cancel_hours=?, book_url=?, pars=?, notes=?, website=?, lat=?, lon=?, info=COALESCE(?, info) WHERE id=?')
+        .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '', c.website || '', c.lat ?? null, c.lon ?? null, info, c.id);
       return api.courseById(c.id);
     }
-    const r = q('INSERT INTO courses(name, address, phone, cancel_hours, book_url, pars, notes) VALUES(?,?,?,?,?,?,?)')
-      .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '');
+    const r = q('INSERT INTO courses(name, address, phone, cancel_hours, book_url, pars, notes, website, lat, lon, info) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '', c.website || '', c.lat ?? null, c.lon ?? null, info);
     return api.courseById(Number(r.lastInsertRowid));
   },
 
@@ -149,6 +186,10 @@ const api = {
       .run(b.courseId, b.course, b.address, b.teeAt, b.players, b.holes, b.bookerId, b.confirmation, b.total, b.deposit, b.cancelAt, b.notes, Date.now(),
         b.cancelReminded ? 1 : 0, b.eveReminded ? 1 : 0, id);
   },
+  setWake: (id, v) => q('UPDATE bookings SET wake=? WHERE id=?').run(v == null ? null : v ? 1 : 0, id),
+  wakeLog: (id) => json(q('SELECT wake_log FROM bookings WHERE id=?').get(id)?.wake_log, {}),
+  setWakeLog: (id, log) => q('UPDATE bookings SET wake_log=? WHERE id=?').run(JSON.stringify(log), id),
+  upcoming: (from, to) => q("SELECT * FROM bookings WHERE status='active' AND tee_at BETWEEN ? AND ?").all(from, to).map((b) => ({ ...bookingRow(b), roster: api.roster(b.id) })),
   setBookingStatus: (id, status) => q('UPDATE bookings SET status=?, updated=? WHERE id=?').run(status, Date.now(), id),
   setRoster(bookingId, userIds) {
     const keep = new Map(api.roster(bookingId).map((r) => [r.userId, r.rsvp]));

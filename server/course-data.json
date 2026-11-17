@@ -1,0 +1,1220 @@
+{
+ "Rancho Park": {
+  "address": "10460 W Pico Blvd, Los Angeles, CA 90064",
+  "phone": "(310) 838-7373",
+  "website": "https://golf.lacity.gov/course_rancho_park/",
+  "notes": [
+   "L.A. City's flagship muni (William P. Bell, 1949); it hosted the L.A. Open for years.",
+   "Back-nine starts are only offered in the first hour of daylight.",
+   "Lighted range, practice greens, snack bar and coffee shop; the separate 9-hole par-3 is next door.",
+   "Weekend green fee is a few dollars higher before 9 a.m."
+  ],
+  "lat": 34.036447,
+  "lon": -118.4255583,
+  "par": 71,
+  "holes": [
+   {
+    "par": 4,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 3,
+    "hcp": 15
+   },
+   {
+    "par": 5,
+    "hcp": 17
+   },
+   {
+    "par": 4,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 13
+   },
+   {
+    "par": 4,
+    "hcp": 9
+   },
+   {
+    "par": 3,
+    "hcp": 11
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 4,
+    "hcp": 6
+   },
+   {
+    "par": 4,
+    "hcp": 4
+   },
+   {
+    "par": 3,
+    "hcp": 10
+   },
+   {
+    "par": 4,
+    "hcp": 12
+   },
+   {
+    "par": 4,
+    "hcp": 8
+   },
+   {
+    "par": 4,
+    "hcp": 2
+   },
+   {
+    "par": 3,
+    "hcp": 18
+   },
+   {
+    "par": 5,
+    "hcp": 16
+   },
+   {
+    "par": 5,
+    "hcp": 14
+   }
+  ],
+  "tees": [
+   {
+    "name": "Black",
+    "rating": 72.8,
+    "slope": 130,
+    "par": 71,
+    "yards": 6839,
+    "holes": [
+     387,
+     467,
+     198,
+     522,
+     401,
+     387,
+     372,
+     214,
+     401,
+     387,
+     462,
+     213,
+     382,
+     416,
+     443,
+     180,
+     522,
+     485
+    ]
+   },
+   {
+    "name": "Blue",
+    "rating": 70.9,
+    "slope": 125,
+    "par": 71,
+    "yards": 6419,
+    "holes": [
+     366,
+     432,
+     173,
+     495,
+     375,
+     376,
+     357,
+     189,
+     376,
+     370,
+     435,
+     195,
+     372,
+     361,
+     420,
+     166,
+     491,
+     470
+    ]
+   },
+   {
+    "name": "White",
+    "rating": 69.1,
+    "slope": 121,
+    "par": 71,
+    "yards": 6036,
+    "holes": [
+     344,
+     403,
+     141,
+     469,
+     356,
+     360,
+     337,
+     168,
+     366,
+     354,
+     411,
+     170,
+     357,
+     335,
+     381,
+     157,
+     475,
+     452
+    ]
+   },
+   {
+    "name": "Yellow",
+    "rating": 67.1,
+    "slope": 116,
+    "par": 71,
+    "yards": 5644,
+    "holes": [
+     338,
+     367,
+     123,
+     445,
+     335,
+     346,
+     308,
+     150,
+     328,
+     344,
+     371,
+     134,
+     352,
+     306,
+     374,
+     122,
+     461,
+     440
+    ]
+   }
+  ],
+  "built": 1949,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "759f60f6-e6c9-436d-8a3e-ea74c373eb9f"
+ },
+ "Griffith Park - Wilson": {
+  "address": "5500 Griffith Park Dr, Los Angeles, CA 90027",
+  "phone": "(323) 663-2555",
+  "website": "https://golf.lacity.gov/wilson-golf-course/",
+  "notes": [
+   "Longest L.A. City course: 7,002 yards from the black tees. Tree-lined, gently sloping fairways.",
+   "Wilson and Harding start from the same clubhouse and there are few signs, so confirm your first tee with the starter.",
+   "Shared lighted two-level range, golf shop and restaurant (restaurant (323) 661-7212)."
+  ],
+  "lat": 34.1387375,
+  "lon": -118.2827098,
+  "par": 72,
+  "holes": [
+   {
+    "par": 5,
+    "hcp": 13
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 3,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 17
+   },
+   {
+    "par": 4,
+    "hcp": 15
+   },
+   {
+    "par": 4,
+    "hcp": 9
+   },
+   {
+    "par": 4,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 5,
+    "hcp": 11
+   },
+   {
+    "par": 4,
+    "hcp": 4
+   },
+   {
+    "par": 3,
+    "hcp": 6
+   },
+   {
+    "par": 4,
+    "hcp": 16
+   },
+   {
+    "par": 4,
+    "hcp": 14
+   },
+   {
+    "par": 5,
+    "hcp": 10
+   },
+   {
+    "par": 3,
+    "hcp": 18
+   },
+   {
+    "par": 4,
+    "hcp": 2
+   },
+   {
+    "par": 4,
+    "hcp": 12
+   },
+   {
+    "par": 4,
+    "hcp": 8
+   }
+  ],
+  "tees": [
+   {
+    "name": "Black",
+    "rating": 73.2,
+    "slope": 126,
+    "par": 72,
+    "yards": 7002,
+    "holes": [
+     532,
+     413,
+     191,
+     344,
+     332,
+     387,
+     401,
+     435,
+     581,
+     413,
+     219,
+     377,
+     390,
+     577,
+     159,
+     442,
+     409,
+     400
+    ]
+   },
+   {
+    "name": "Blue",
+    "rating": 71.7,
+    "slope": 122,
+    "par": 72,
+    "yards": 6718,
+    "holes": [
+     517,
+     398,
+     182,
+     331,
+     320,
+     379,
+     385,
+     425,
+     541,
+     395,
+     199,
+     361,
+     369,
+     555,
+     150,
+     433,
+     394,
+     384
+    ]
+   },
+   {
+    "name": "White",
+    "rating": 70.2,
+    "slope": 118,
+    "par": 72,
+    "yards": 6382,
+    "holes": [
+     491,
+     385,
+     164,
+     317,
+     308,
+     368,
+     370,
+     410,
+     526,
+     381,
+     180,
+     346,
+     350,
+     491,
+     138,
+     421,
+     369,
+     367
+    ]
+   },
+   {
+    "name": "White/Yellow",
+    "rating": 68.2,
+    "slope": 113,
+    "par": 72,
+    "yards": 5956,
+    "holes": [
+     457,
+     346,
+     164,
+     285,
+     308,
+     368,
+     327,
+     410,
+     421,
+     381,
+     130,
+     295,
+     350,
+     491,
+     138,
+     349,
+     369,
+     367
+    ]
+   },
+   {
+    "name": "Yellow",
+    "rating": 65,
+    "slope": 105,
+    "par": 72,
+    "yards": 5276,
+    "holes": [
+     457,
+     346,
+     112,
+     285,
+     279,
+     313,
+     327,
+     309,
+     421,
+     315,
+     130,
+     295,
+     232,
+     403,
+     131,
+     349,
+     267,
+     305
+    ]
+   }
+  ],
+  "built": null,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "e9e2c725-437f-4974-a604-32074dea61dd"
+ },
+ "Griffith Park - Harding": {
+  "address": "5500 Griffith Park Dr, Los Angeles, CA 90027",
+  "phone": "(323) 663-2555",
+  "website": "https://golf.lacity.gov/?p=453",
+  "notes": [
+   "Opened 1923. Narrower than Wilson, with tough approaches into guarded greens: accuracy over distance.",
+   "Some out-of-bounds lines where Harding borders Wilson are hard to see from the tee.",
+   "Deer are common, coyotes too. Shares the clubhouse and range with Wilson."
+  ],
+  "lat": 34.141912,
+  "lon": -118.2839686,
+  "par": 72,
+  "holes": [
+   {
+    "par": 4,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 17
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 4,
+    "hcp": 11
+   },
+   {
+    "par": 3,
+    "hcp": 13
+   },
+   {
+    "par": 5,
+    "hcp": 15
+   },
+   {
+    "par": 5,
+    "hcp": 9
+   },
+   {
+    "par": 4,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 4,
+    "hcp": 8
+   },
+   {
+    "par": 4,
+    "hcp": 2
+   },
+   {
+    "par": 4,
+    "hcp": 12
+   },
+   {
+    "par": 3,
+    "hcp": 4
+   },
+   {
+    "par": 4,
+    "hcp": 18
+   },
+   {
+    "par": 3,
+    "hcp": 10
+   },
+   {
+    "par": 4,
+    "hcp": 6
+   },
+   {
+    "par": 4,
+    "hcp": 16
+   },
+   {
+    "par": 5,
+    "hcp": 14
+   }
+  ],
+  "tees": [
+   {
+    "name": "Black",
+    "rating": 71.4,
+    "slope": 121,
+    "par": 72,
+    "yards": 6714,
+    "holes": [
+     430,
+     346,
+     405,
+     330,
+     185,
+     555,
+     498,
+     399,
+     427,
+     360,
+     401,
+     388,
+     201,
+     374,
+     179,
+     377,
+     363,
+     496
+    ]
+   },
+   {
+    "name": "Blue",
+    "rating": 70,
+    "slope": 118,
+    "par": 72,
+    "yards": 6423,
+    "holes": [
+     417,
+     333,
+     395,
+     320,
+     174,
+     543,
+     471,
+     371,
+     414,
+     351,
+     391,
+     366,
+     183,
+     353,
+     168,
+     359,
+     335,
+     479
+    ]
+   },
+   {
+    "name": "White",
+    "rating": 68.7,
+    "slope": 115,
+    "par": 72,
+    "yards": 6168,
+    "holes": [
+     404,
+     314,
+     386,
+     310,
+     162,
+     531,
+     449,
+     360,
+     403,
+     343,
+     381,
+     347,
+     172,
+     337,
+     154,
+     348,
+     300,
+     467
+    ]
+   },
+   {
+    "name": "White/Yellow",
+    "rating": 67,
+    "slope": 111,
+    "par": 72,
+    "yards": 5811,
+    "holes": [
+     333,
+     314,
+     386,
+     310,
+     162,
+     415,
+     449,
+     298,
+     403,
+     343,
+     338,
+     347,
+     134,
+     337,
+     154,
+     348,
+     300,
+     440
+    ]
+   },
+   {
+    "name": "Yellow",
+    "rating": 63,
+    "slope": 101,
+    "par": 72,
+    "yards": 4946,
+    "holes": [
+     333,
+     262,
+     295,
+     249,
+     119,
+     415,
+     360,
+     298,
+     233,
+     271,
+     338,
+     287,
+     134,
+     269,
+     135,
+     276,
+     232,
+     440
+    ]
+   }
+  ],
+  "built": 1923,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "94b9f7af-fabf-4c5a-a893-cbae19aa80b7"
+ },
+ "Roosevelt": {
+  "address": "2650 N Vermont Ave, Los Angeles, CA 90027",
+  "phone": "(323) 665-2011",
+  "website": "https://golf.lacity.gov/course_roosevelt/",
+  "notes": [
+   "9-hole executive, par 33, about 2,500 yards. Walking only: no carts and no cart paths, and it is hilly.",
+   "Across the street from the Greek Theatre, with views of the Observatory and downtown.",
+   "Fivesomes are allowed, so 9 holes can take 2.5 hours or more. Caf\u00e9: (323) 545-0444."
+  ],
+  "lat": 34.1183253,
+  "lon": -118.293759,
+  "par": 33,
+  "holes": [
+   {
+    "par": 4,
+    "hcp": 11
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 3,
+    "hcp": 17
+   },
+   {
+    "par": 4,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 9
+   },
+   {
+    "par": 3,
+    "hcp": 13
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 3,
+    "hcp": 15
+   }
+  ],
+  "tees": [
+   {
+    "name": "Black",
+    "rating": 63.8,
+    "slope": 106,
+    "par": 66,
+    "yards": 4992,
+    "holes": null
+   },
+   {
+    "name": "Blue",
+    "rating": 62.2,
+    "slope": 102,
+    "par": 66,
+    "yards": 4632,
+    "holes": null
+   },
+   {
+    "name": "White",
+    "rating": 58.6,
+    "slope": 87,
+    "par": 66,
+    "yards": 3282,
+    "holes": null
+   }
+  ],
+  "built": 1964,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "c5a0c6f9-b6af-4b27-adbc-d5d13b8a575b"
+ },
+ "Los Verdes Golf Course": {
+  "address": "7000 W Los Verdes Dr, Rancho Palos Verdes, CA 90275",
+  "phone": "(310) 377-7888",
+  "website": "http://www.losverdesgc.com/",
+  "notes": [
+   "L.A. County course on the Palos Verdes bluffs: ocean and Catalina views on most holes.",
+   "Known for slow rounds (5 to 6 hours on weekends, with fivesomes). The earliest tee times play fastest.",
+   "Ocean breeze picks up in the afternoon and marine fog can roll in late in the day.",
+   "Full range, putting and chipping greens. Ocean View Grill: ext. 42 on the main number."
+  ],
+  "lat": 33.754087,
+  "lon": -118.400657,
+  "par": 71,
+  "holes": [
+   {
+    "par": 5,
+    "hcp": 11
+   },
+   {
+    "par": 4,
+    "hcp": 9
+   },
+   {
+    "par": 3,
+    "hcp": 15
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 3,
+    "hcp": 13
+   },
+   {
+    "par": 5,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 4,
+    "hcp": 17
+   },
+   {
+    "par": 4,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 14
+   },
+   {
+    "par": 4,
+    "hcp": 18
+   },
+   {
+    "par": 3,
+    "hcp": 16
+   },
+   {
+    "par": 4,
+    "hcp": 2
+   },
+   {
+    "par": 4,
+    "hcp": 6
+   },
+   {
+    "par": 4,
+    "hcp": 4
+   },
+   {
+    "par": 5,
+    "hcp": 12
+   },
+   {
+    "par": 3,
+    "hcp": 10
+   },
+   {
+    "par": 4,
+    "hcp": 8
+   }
+  ],
+  "tees": [
+   {
+    "name": "Blue",
+    "rating": 72,
+    "slope": 124,
+    "par": 71,
+    "yards": 6617,
+    "holes": [
+     501,
+     370,
+     178,
+     445,
+     190,
+     558,
+     379,
+     365,
+     412,
+     377,
+     304,
+     147,
+     397,
+     416,
+     441,
+     490,
+     218,
+     417
+    ]
+   },
+   {
+    "name": "White",
+    "rating": 70.3,
+    "slope": 120,
+    "par": 71,
+    "yards": 6234,
+    "holes": [
+     471,
+     351,
+     163,
+     430,
+     149,
+     507,
+     361,
+     352,
+     401,
+     364,
+     291,
+     134,
+     364,
+     375,
+     432,
+     462,
+     201,
+     403
+    ]
+   },
+   {
+    "name": "Red",
+    "rating": 68,
+    "slope": 115,
+    "par": 71,
+    "yards": 5772,
+    "holes": [
+     458,
+     322,
+     138,
+     316,
+     134,
+     467,
+     328,
+     338,
+     393,
+     334,
+     276,
+     114,
+     352,
+     357,
+     396,
+     438,
+     176,
+     368
+    ]
+   },
+   {
+    "name": "Orange",
+    "rating": 62,
+    "slope": 101,
+    "par": 71,
+    "yards": 4373,
+    "holes": [
+     386,
+     280,
+     87,
+     286,
+     74,
+     351,
+     256,
+     280,
+     288,
+     266,
+     219,
+     74,
+     262,
+     304,
+     303,
+     338,
+     141,
+     281
+    ]
+   }
+  ],
+  "built": 1964,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "a23a98a5-4424-4c3c-8d31-4d36ffd5c7d0"
+ },
+ "Soule Park Golf Course": {
+  "address": "1033 E Ojai Ave, Ojai, CA 93023",
+  "phone": "(805) 646-5633",
+  "website": "https://www.soulepark.com/",
+  "notes": [
+   "Gil Hanse redesign with mountain backdrops on every hole; very walkable.",
+   "Winter mornings in the Ojai valley often bring frost delays, so call ahead for an early tee time from December to February.",
+   "Tees are named for local crops: Oak (back), Orange, Avocado, Lime, Lemon (forward). Orange is about the usual blue.",
+   "Afternoon wind can pick up in the valley."
+  ],
+  "lat": 34.4433835,
+  "lon": -119.231474,
+  "par": 72,
+  "holes": [
+   {
+    "par": 4,
+    "hcp": 7
+   },
+   {
+    "par": 4,
+    "hcp": 9
+   },
+   {
+    "par": 3,
+    "hcp": 11
+   },
+   {
+    "par": 5,
+    "hcp": 13
+   },
+   {
+    "par": 5,
+    "hcp": 17
+   },
+   {
+    "par": 3,
+    "hcp": 5
+   },
+   {
+    "par": 4,
+    "hcp": 3
+   },
+   {
+    "par": 4,
+    "hcp": 1
+   },
+   {
+    "par": 4,
+    "hcp": 15
+   },
+   {
+    "par": 3,
+    "hcp": 14
+   },
+   {
+    "par": 5,
+    "hcp": 12
+   },
+   {
+    "par": 4,
+    "hcp": 8
+   },
+   {
+    "par": 4,
+    "hcp": 16
+   },
+   {
+    "par": 4,
+    "hcp": 2
+   },
+   {
+    "par": 4,
+    "hcp": 4
+   },
+   {
+    "par": 3,
+    "hcp": 10
+   },
+   {
+    "par": 4,
+    "hcp": 6
+   },
+   {
+    "par": 5,
+    "hcp": 18
+   }
+  ],
+  "tees": [
+   {
+    "name": "Oak",
+    "rating": 73,
+    "slope": 128,
+    "par": 72,
+    "yards": 6856,
+    "holes": [
+     393,
+     395,
+     140,
+     512,
+     490,
+     242,
+     429,
+     426,
+     350,
+     160,
+     551,
+     427,
+     370,
+     427,
+     461,
+     172,
+     410,
+     501
+    ]
+   },
+   {
+    "name": "Orange",
+    "rating": 71.6,
+    "slope": 125,
+    "par": 72,
+    "yards": 6588,
+    "holes": [
+     382,
+     361,
+     132,
+     502,
+     478,
+     229,
+     420,
+     408,
+     347,
+     155,
+     513,
+     420,
+     357,
+     420,
+     418,
+     162,
+     392,
+     492
+    ]
+   },
+   {
+    "name": "Orange/Avocado",
+    "rating": 70.7,
+    "slope": 123,
+    "par": 72,
+    "yards": 6396,
+    "holes": [
+     382,
+     328,
+     132,
+     502,
+     478,
+     190,
+     420,
+     310,
+     347,
+     155,
+     513,
+     420,
+     357,
+     410,
+     406,
+     162,
+     392,
+     492
+    ]
+   },
+   {
+    "name": "Avocado",
+    "rating": 69.5,
+    "slope": 120,
+    "par": 72,
+    "yards": 6159,
+    "holes": [
+     370,
+     328,
+     123,
+     492,
+     442,
+     190,
+     357,
+     310,
+     343,
+     142,
+     501,
+     382,
+     344,
+     410,
+     406,
+     156,
+     384,
+     479
+    ]
+   },
+   {
+    "name": "Avocado/Lime",
+    "rating": 68.6,
+    "slope": 118,
+    "par": 72,
+    "yards": 5971,
+    "holes": [
+     370,
+     312,
+     123,
+     492,
+     442,
+     183,
+     323,
+     310,
+     343,
+     142,
+     501,
+     382,
+     344,
+     355,
+     330,
+     156,
+     384,
+     479
+    ]
+   },
+   {
+    "name": "Lime",
+    "rating": 66.9,
+    "slope": 114,
+    "par": 72,
+    "yards": 5627,
+    "holes": [
+     351,
+     312,
+     116,
+     439,
+     432,
+     183,
+     323,
+     301,
+     272,
+     139,
+     460,
+     371,
+     309,
+     355,
+     330,
+     151,
+     354,
+     429
+    ]
+   },
+   {
+    "name": "Lemon",
+    "rating": 65,
+    "slope": 109,
+    "par": 72,
+    "yards": 5236,
+    "holes": [
+     342,
+     213,
+     110,
+     410,
+     423,
+     162,
+     279,
+     290,
+     265,
+     138,
+     451,
+     327,
+     299,
+     352,
+     301,
+     146,
+     311,
+     417
+    ]
+   }
+  ],
+  "built": 1962,
+  "source": "OpenGolfAPI (\u00a9 OpenStreetMap contributors, ODbL)",
+  "ogapiId": "bf3c8dde-5d5a-4c61-837a-c111b3da27b6"
+ }
+}

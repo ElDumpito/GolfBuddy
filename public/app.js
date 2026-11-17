@@ -1,10 +1,12 @@
 'use strict';
 // GolfBuddy client. One page; the part after # in the address picks the screen.
+// Shot tracking and the gear closet live in track.js, which plugs into the same render loop.
 const TZ = 'America/Los_Angeles';
-const HOUR = 3600000;
+const HOUR = 3600000, MIN = 60000;
 let S = null;            // everything from /api/state
 let installEvt = null;   // Chrome's "install this app" prompt, saved for the button in Me
-const ui = { form: null, exp: null, round: null, hole: {}, pendingPay: null, showPast: false, shareText: null, saving: {} };
+const ui = { form: null, exp: null, round: null, hole: {}, pendingPay: null, showPast: false, shareText: null, saving: {}, briefs: {}, tee: {}, practice: null, keys: null };
+const extraViews = {};   // route name -> view function, filled in by track.js
 
 // ---------- helpers ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -16,6 +18,7 @@ const user = (id) => S.users.find((u) => u.id === id) || { id, name: 'Someone', 
 const first = (id) => (id === S.me.id ? 'You' : user(id).name.split(/\s+/)[0]);
 const fmt = (t, o) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...o }).format(new Date(t));
 const fDay = (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric' });
+const fLongDay = (t) => fmt(t, { weekday: 'long', month: 'long', day: 'numeric' });
 const fTime = (t) => fmt(t, { hour: 'numeric', minute: '2-digit' });
 const fWhen = (t) => `${fDay(t)}, ${fTime(t)}`;
 function laParts(t) {
@@ -37,7 +40,14 @@ function dur(ms) {
   if (h < 48) return `${h}h${m % 60 && h < 10 ? ` ${m % 60}m` : ''}`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2600); }
+function until(t) {
+  const now = Date.now(), days = Math.round((laTime(laParts(t).date, '12:00') - laTime(laParts(now).date, '12:00')) / (24 * HOUR));
+  if (t < now) return 'Under way';
+  if (days === 0) return t - now < 3 * HOUR ? `In ${dur(t - now)}` : 'Today';
+  if (days === 1) return 'Tomorrow';
+  return days < 7 ? fmt(t, { weekday: 'long' }) : `In ${days} days`;
+}
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2800); }
 async function api(method, path, body) {
   const res = await fetch(path, { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   let data = {};
@@ -53,7 +63,9 @@ function route() {
   return { seg, q: new URLSearchParams(qs || '') };
 }
 const myBalance = () => (S.balances.find((b) => b.userId === S.me.id) || { balance: 0 }).balance;
-const mapsUrl = (b) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(b.address || b.course)}`;
+const courseOf = (b) => S.courses.find((x) => x.id === b.courseId) || S.courses.find((x) => x.name === b.course) || {};
+const mapsUrl = (b) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(b.address || b.course)}&travelmode=driving`;
+const telUrl = (p) => `tel:${String(p).replace(/[^\d+]/g, '')}`;
 function gcalUrl(b) {
   const z = (t) => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const end = b.teeAt + (b.holes === 9 ? 2.5 : 4.75) * HOUR;
@@ -63,17 +75,68 @@ function gcalUrl(b) {
 }
 const venmoUrl = (to, amount, note, txn = 'pay') => `https://venmo.com/${encodeURIComponent(to)}?txn=${txn}&amount=${(amount / 100).toFixed(2)}&note=${encodeURIComponent(note)}`;
 
+// ---------- icons (simple line drawings, so the app looks the same on every phone) ----------
+const ICONS = {
+  flag: '<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r=".8"/>',
+  card: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  nav: '<path d="M3 11l18-8-8 18-2-8z"/>',
+  phone: '<path d="M5 4h4l2 5-3 2a12 12 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A17 17 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 3.5 6 3.5 9s-1 6-3.5 9c-2.5-3-3.5-6-3.5-9s1-6 3.5-9"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  sunset: '<path d="M3 18h18M6.5 18a5.5 5.5 0 0 1 11 0M12 3v6M9 6.5l3 3 3-3"/>',
+  cloud: '<path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 9.1 4.5 4.5 0 0 0 7 18z"/>',
+  rain: '<path d="M7 15h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 6.1 4.5 4.5 0 0 0 7 15z"/><path d="M8 21l1-3M12 21l1-3M16 21l1-3"/>',
+  wind: '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h8"/>',
+  car: '<path d="M4 15l1.6-5.1A2 2 0 0 1 7.5 8.5h9a2 2 0 0 1 1.9 1.4L20 15v3a1 1 0 0 1-1 1h-1.5a1 1 0 0 1-1-1v-1h-9v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M4 15h16M7.5 12h.01M16.5 12h.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  alarm: '<circle cx="12" cy="13" r="7"/><path d="M12 10v3l2 1.5M5 4L3 6M19 4l2 2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>',
+  back: '<path d="M15 6l-6 6 6 6"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  bag: '<path d="M8 8V6a4 4 0 0 1 8 0v2"/><rect x="5" y="8" width="14" height="13" rx="3"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+  locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  trend: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+};
+const icon = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const skyIcon = (sky) => (/thunder|rain|shower|drizzle/i.test(sky || '') ? 'rain' : /cloud|overcast|fog|haze|smoke/i.test(sky || '') ? 'cloud' : 'sun');
+const TEE_COLORS = { black: '#111', blue: '#3b6fd6', white: '#f4f1e8', red: '#c84a3c', yellow: '#e8c547', gold: '#d4a73c', green: '#3e8a57', orange: '#e58a2b',
+  oak: '#6b4a2b', avocado: '#5d7b2f', lime: '#9cc94b', lemon: '#efe26a', combo: '#bdb8a7' };
+const teeDot = (name) => { const k = String(name).toLowerCase().split('/')[0].trim(); return `<span class="dot" style="background:${TEE_COLORS[k] || '#888'}"></span>`; };
+
 // ---------- frame ----------
-function frame({ title, back, right = '', body, tab }) {
-  const tabs = [['tee', '#/', '⛳', 'Tee times'], ['money', '#/money', '💵', 'Money'], ['scores', '#/scores', '📋', 'Scores'], ['me', '#/me', '👤', 'Me']];
-  return `<header class="top">${back ? `<a class="btn ghost back" href="${back}">‹ Back</a>` : ''}<h1 class="grow">${esc(title)}</h1>${right}</header>
+function frame({ title, back, right = '', body, tab, wordmark }) {
+  const tabs = [['tee', '#/', 'flag', 'Tee times'], ['money', '#/money', 'wallet', 'Money'], ['scores', '#/scores', 'card', 'Rounds'], ['me', '#/me', 'user', 'Me']];
+  return `<header class="top">${back ? `<a class="btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
+    ${wordmark ? `<span class="wordmark grow">Golf<b>Buddy</b></span>` : `<h1 class="grow">${esc(title)}</h1>`}${right}</header>
   <main class="page">${body}</main>
-  <nav class="nav">${tabs.map(([k, h, i, l]) => `<a href="${h}" class="${tab === k ? 'on' : ''}"><span class="i">${i}</span>${l}</a>`).join('')}</nav>`;
+  <nav class="nav">${tabs.map(([k, h, i, l]) => `<a href="${h}" class="${tab === k ? 'on' : ''}">${icon(i)}${l}</a>`).join('')}</nav>`;
 }
 function balanceChip() {
   const b = myBalance();
   if (!b) return `<a class="pill ok" href="#/money">All square</a>`;
-  return `<a class="pill ${b > 0 ? 'ok' : 'warn'}" href="#/money">${b > 0 ? `You're owed ${money(b)}` : `You owe ${money(-b)}`}</a>`;
+  return `<a class="pill ${b > 0 ? 'ok' : 'warn'} num" href="#/money">${b > 0 ? `Owed ${money(b)}` : `You owe ${money(-b)}`}</a>`;
+}
+
+// ---------- the Round Brief (fetched per tee time, kept for 10 minutes) ----------
+function loadBrief(id, force) {
+  const cur = ui.briefs[id];
+  if (cur && (cur.loading || (!force && Date.now() - cur.at < 10 * MIN))) return cur.data;
+  ui.briefs[id] = { ...cur, loading: true, at: Date.now() };
+  api('GET', `/api/bookings/${id}/brief`).then((d) => { ui.briefs[id] = { data: d, at: Date.now() }; if (!busyForm()) render(); })
+    .catch(() => { ui.briefs[id] = { data: cur?.data || null, at: Date.now(), failed: true }; });
+  return cur?.data;
 }
 
 // ---------- tee times ----------
@@ -83,84 +146,201 @@ function deadlinePill(b) {
   if (b.teeAt < now) return `<span class="pill">Played</span>`;
   if (now < b.cancelAt) {
     const left = b.cancelAt - now;
-    return `<span class="pill ${left < S.remindHours * HOUR ? 'warn' : 'ok'}">Free cancel: ${dur(left)} left</span>`;
+    return `<span class="pill ${left < S.remindHours * HOUR ? 'warn' : 'ok'}">Free cancel · ${dur(left)} left</span>`;
   }
-  return `<span class="pill">🔒 Locked in</span>`;
+  return `<span class="pill">Locked in</span>`;
 }
 function rosterChips(b) {
-  return b.roster.map((r) => `<span class="pill ${r.rsvp === 'out' ? 'bad' : 'ok'}">${r.rsvp === 'out' ? '❌' : '✅'} ${esc(first(r.userId))}</span>`).join('');
+  return b.roster.map((r) => `<span class="pill ${r.rsvp === 'out' ? 'bad' : 'ok'}">${r.rsvp === 'out' ? '✕' : icon('check', 'sm')} ${esc(first(r.userId))}</span>`).join('');
 }
-function teeCard(b) {
+function teeRow(b) {
   const off = b.status === 'cancelled' || b.teeAt < Date.now() - 5 * HOUR;
   return `<a class="tee ${off ? 'off' : ''}" href="#/b/${b.id}">
-    <div class="date"><span class="wd">${fmt(b.teeAt, { weekday: 'short' })}</span><span class="d">${fmt(b.teeAt, { day: 'numeric' })}</span><span class="m">${fmt(b.teeAt, { month: 'short' })}</span></div>
+    <div class="date"><div class="wd">${fmt(b.teeAt, { weekday: 'short' })}</div><div class="d">${fmt(b.teeAt, { day: 'numeric' })}</div><div class="m">${fmt(b.teeAt, { month: 'short' })}</div></div>
     <div class="grow"><div class="name">${esc(b.course)}</div>
-      <div class="dim small-text">${fTime(b.teeAt)} · ${b.holes} holes · ${b.players} players · ${esc(first(b.bookerId))} booked</div>
-      <div class="who">${deadlinePill(b)}${rosterChips(b)}</div></div></a>`;
+      <div class="meta">${fTime(b.teeAt)} · ${b.holes} holes · ${b.roster.filter((r) => r.rsvp !== 'out').map((r) => esc(first(r.userId))).join(' & ')}</div></div>
+    <span class="chev">${icon('chev')}</span></a>`;
+}
+function glance(b, br) {
+  const w = br?.weather, l = br?.leave, sun = br?.sun;
+  const cell = (k, ic, v, s) => `<div><div class="k">${icon(ic, 'sm')}${k}</div><div class="v">${v}</div><div class="s">${s || '&nbsp;'}</div></div>`;
+  const wx = !br ? cell('Weather', 'sun', '<span class="faint">…</span>')
+    : w?.at ? cell('Weather', skyIcon(w.at.sky), `${w.at.temp}°`, w.at.pop >= 20 ? `${w.at.pop}% rain` : esc(w.at.sky))
+    : w?.status === 'later' ? cell('Weather', 'cloud', '<span class="faint">—</span>', `Forecast ${fDay(w.opensAt)}`) : cell('Weather', 'cloud', '<span class="faint">—</span>', 'Unavailable');
+  const lv = !br ? cell('Leave by', 'car', '<span class="faint">…</span>')
+    : l?.status === 'ok' ? cell('Leave by', 'car', fTime(l.at), `${l.minutes} min drive`)
+    : l?.status === 'nohome' ? cell('Leave by', 'car', '<span class="faint">—</span>', 'Add home in Me')
+    : l?.status === 'nokey' ? cell('Leave by', 'car', '<span class="faint">—</span>', 'Needs Google key') : cell('Leave by', 'car', '<span class="faint">—</span>', 'Unavailable');
+  const dl = !sun ? cell('Daylight', 'sunset', '<span class="faint">—</span>')
+    : sun.beforeSunrise ? cell('Sunrise', 'sun', fTime(sun.sunrise), `Tee ${dur(sun.sunrise - b.teeAt)} before`)
+    : cell('Sunset', 'sunset', fTime(sun.sunset), sun.pastDark ? 'Finish after dark' : sun.pastSunset ? 'Finish near dusk' : `Done ~${fTime(sun.finish).replace(/\s?[AP]M$/, '')}`);
+  return `<div class="glance">${wx}${lv}${dl}</div>`;
 }
 function viewTeeTimes() {
   const now = Date.now();
   const up = S.bookings.filter((b) => b.status === 'active' && b.teeAt > now - 5 * HOUR).sort((a, b) => a.teeAt - b.teeAt);
   const past = S.bookings.filter((b) => !up.includes(b)).sort((a, b) => b.teeAt - a.teeAt);
-  const pushHint = !S.push.mine && 'Notification' in window ? `<div class="card row"><span class="grow">🔔 Turn on notifications so you hear about new tee times and cancellation deadlines.</span><button class="primary small" data-act="push-on">Turn on</button></div>` : '';
+  const next = up[0];
+  const br = next && loadBrief(next.id);
+  const pushHint = !S.push.mine && 'Notification' in window ? `<div class="card row"><span class="ic brass">${icon('bell')}</span><span class="grow small-text">Turn on notifications to hear about new tee times and cancellation deadlines.</span><button class="primary small-btn chip" data-act="push-on">Turn on</button></div>` : '';
   return frame({
-    title: 'GolfBuddy', tab: 'tee', right: balanceChip(),
-    body: `${pushHint}<a class="btn primary block" href="#/new">＋ Add a tee time</a>
-    <section class="card"><h2>Coming up</h2>${up.length ? up.map(teeCard).join('') : `<div class="empty">Nothing booked. Paste a confirmation email to add one.</div>`}</section>
-    ${past.length ? `<section class="card"><div class="row"><h2 class="grow" style="margin:0">Past &amp; cancelled</h2><button class="small ghost" data-act="toggle-past">${ui.showPast ? 'Hide' : `Show ${past.length}`}</button></div>
-      ${ui.showPast ? `<div style="margin-top:10px">${past.slice(0, 40).map(teeCard).join('')}</div>` : ''}</section>` : ''}`,
+    wordmark: true, tab: 'tee', right: balanceChip(),
+    body: `${pushHint}
+    ${next ? `<a class="card hero" href="#/b/${next.id}" style="color:inherit">
+      <div class="row"><span class="over grow">Next round · ${esc(until(next.teeAt))}</span>${deadlinePill(next)}</div>
+      <div class="course">${esc(next.course)}</div>
+      <div class="when">${fLongDay(next.teeAt)} at ${fTime(next.teeAt)}</div>
+      ${glance(next, br)}</a>`
+      : `<section class="card hero"><div class="over">No round on the books</div><div class="course">Where to next?</div><div class="when">Paste a confirmation email and the rest fills itself in.</div></section>`}
+    <a class="btn primary block" href="#/new">${icon('plus')} Add a tee time</a>
+    ${up.length > 1 ? `<section class="card"><div class="card-head"><h2>Also coming up</h2></div><div class="list">${up.slice(1).map(teeRow).join('')}</div></section>` : ''}
+    <section class="card flush list">
+      <a class="link-row" href="#/practice"><span class="ic">${icon('target')}</span><span class="grow"><b>Ranges &amp; simulators</b><div class="small-text dim">Within 30 miles of you</div></span><span class="faint">${icon('chev')}</span></a>
+      <a class="link-row" href="#/bag"><span class="ic">${icon('bag')}</span><span class="grow"><b>Your bag</b><div class="small-text dim">Clubs, balls, gloves and shoes</div></span><span class="faint">${icon('chev')}</span></a>
+    </section>
+    ${past.length ? `<section class="card"><div class="card-head"><h2>Past &amp; cancelled</h2><button class="quiet chip" data-act="toggle-past">${ui.showPast ? 'Hide' : `Show ${past.length}`}</button></div>
+      ${ui.showPast ? `<div class="list">${past.slice(0, 40).map(teeRow).join('')}</div>` : ''}</section>` : ''}`,
   });
+}
+
+// --- the brief sections on a tee time ---
+function briefWeather(b, w) {
+  if (!w) return `<div class="bline"><span class="ic">${icon('cloud')}</span><div class="grow dim small-text">Checking the forecast…</div></div>`;
+  if (w.status === 'later') return `<div class="bline"><span class="ic">${icon('cloud')}</span><div class="grow"><div class="mid">Forecast opens ${fDay(w.opensAt)}</div><div class="small-text dim">The National Weather Service forecasts 7 days out.</div></div></div>`;
+  if (w.status === 'error' || !w.at) return `<div class="bline"><span class="ic">${icon('cloud')}</span><div class="grow small-text dim">Weather is unavailable right now.</div></div>`;
+  const a = w.at;
+  return `<div class="bline"><span class="ic">${icon(skyIcon(a.sky))}</span><div class="grow">
+      <div class="row"><span class="big">${a.temp}°</span><span class="dim grow">${esc(a.sky)}</span></div>
+      <div class="small-text dim" style="margin-top:4px">${w.lo != null && w.lo !== w.hi ? `${w.lo}–${w.hi}° over the round · ` : ''}${icon('wind', 'sm')} ${w.windMax ?? a.wind ?? '?'} mph ${esc(a.dir || '')} · ${w.popMax ?? a.pop ?? 0}% chance of rain</div></div></div>
+    ${w.hours?.length > 1 ? `<div class="hours">${w.hours.slice(0, 6).map((h) => `<div>${fmt(h.s, { hour: 'numeric' })}<b>${h.t}°</b>${h.p >= 20 ? `${h.p}%` : `${h.w ?? ''} mph`}</div>`).join('')}</div>` : ''}
+    ${w.text ? `<p class="small-text dim" style="margin:10px 0 0">${esc(w.text)}</p>` : ''}`;
+}
+function briefDaylight(b, s) {
+  if (!s) return '';
+  const span = s.lastLight - s.firstLight, pct = (t) => Math.max(0, Math.min(100, ((t - s.firstLight) / span) * 100));
+  const warn = s.pastDark ? `A ${b.holes}-hole round from ${fTime(b.teeAt)} runs until about ${fTime(s.finish)}, after dark (${fTime(s.lastLight)}).`
+    : s.pastSunset ? `You'll likely finish around sunset; last light is ${fTime(s.lastLight)}.`
+    : s.beforeSunrise ? `You tee off ${dur(s.sunrise - b.teeAt)} before sunrise; first light is ${fTime(s.firstLight)}.` : '';
+  return `<div class="bline"><span class="ic">${icon('sunset')}</span><div class="grow">
+      <div class="row"><span class="mid grow">${fTime(s.sunrise)} – ${fTime(s.sunset)}</span><span class="small-text dim">last light ${fTime(s.lastLight)}</span></div>
+      <div class="daybar"><span class="span" style="left:${pct(b.teeAt)}%;width:${Math.max(2, pct(s.finish) - pct(b.teeAt))}%"></span></div>
+      <div class="row tiny faint"><span class="grow">First light ${fTime(s.firstLight)}</span><span>Your round ${fTime(b.teeAt)}–${fTime(s.finish)}</span></div>
+      ${warn ? `<div class="note ${s.pastDark ? 'warn-note' : ''}" style="margin-top:10px">${warn}</div>` : ''}</div></div>`;
+}
+function briefLeave(b, l) {
+  if (!l) return `<div class="bline"><span class="ic">${icon('car')}</span><div class="grow dim small-text">Working out the drive…</div></div>`;
+  if (l.status === 'nohome') return `<div class="bline"><span class="ic">${icon('car')}</span><div class="grow"><div class="mid">When to leave</div><div class="small-text dim">Add your home address in <a href="#/me">Me</a> to see when to leave, with traffic for that time of day.</div></div></div>`;
+  if (l.status === 'nokey') return `<div class="bline"><span class="ic">${icon('car')}</span><div class="grow"><div class="mid">When to leave</div><div class="small-text dim">Turns on once the Google key is added in Me › Admin.</div></div></div>`;
+  if (l.status !== 'ok') return `<div class="bline"><span class="ic">${icon('car')}</span><div class="grow small-text dim">Drive time unavailable right now.</div></div>`;
+  const extra = l.minutes - l.usual;
+  return `<div class="bline"><span class="ic">${icon('car')}</span><div class="grow">
+    <div class="row"><span class="over grow">Leave home by</span></div>
+    <div class="row"><span class="big">${fTime(l.at)}</span><span class="dim small-text grow">to arrive ${fTime(l.arrive)}, ${Math.round((b.teeAt - l.arrive) / MIN)} min early</span></div>
+    <div class="small-text dim" style="margin-top:4px">${l.minutes} min · ${l.miles} mi in expected traffic${extra > 4 ? ` (${extra} min more than an empty road)` : ''}. Checked ${fTime(l.checked)}.</div></div></div>`;
+}
+function briefWake(b, w) {
+  if (!w || b.teeAt < Date.now()) return '';
+  const people = w.people.filter((p) => !p.out);
+  const line = (p) => {
+    const nm = p.userId === S.me.id ? 'You' : esc(user(p.userId).name.split(/\s+/)[0]);
+    if (!p.ready) return `<div class="small-text dim">${nm}: not set up${p.userId === S.me.id ? ` (<a href="#/me">phone, home and the wake-up switch in Me</a>)` : ''}</div>`;
+    const st = p.done === 'answered' ? 'answered ✓' : p.done === 'missed' ? 'didn’t pick up' : p.done === 'push-only' ? 'notified (no call: phone service not set up)'
+      : p.skipped ? 'skipped, booked too late' : p.tries ? `called ${p.tries}×` : p.callAt ? `rings at ${fTime(p.callAt)}${p.estimate ? ' (estimate)' : ''}` : 'will ring 30 min before leave-by';
+    return `<div class="small-text">${nm}: <span class="dim">${st}</span></div>`;
+  };
+  return `<div class="bline"><span class="ic">${icon('alarm')}</span><div class="grow">
+    <div class="row"><span class="mid grow">Wake-up call</span><button class="switch ${w.on ? 'on' : ''}" data-act="wake-toggle" data-id="${b.id}" data-v="${w.on ? 0 : 1}" aria-label="Wake-up call"></button></div>
+    <div class="tiny faint" style="margin:2px 0 8px">${w.auto ? `Automatic: ${w.on ? 'on because it’s before 8 a.m.' : 'off for tee times after 8 a.m.'}` : `Switched ${w.on ? 'on' : 'off'} for this tee time · <a href="#" data-act="wake-auto" data-id="${b.id}">reset</a>`}</div>
+    ${w.on ? people.map(line).join('') : ''}${!S.features.calls && w.on ? `<div class="tiny faint" style="margin-top:6px">Until the phone service is set up, this arrives as a notification instead of a call.</div>` : ''}</div></div>`;
+}
+function scorecardTable(info, tee) {
+  const holes = info.holes, t = info.tees.find((x) => x.name === tee) || info.tees[0];
+  const n = holes.length, split = n === 18;
+  const ys = t?.holes;
+  const sum = (arr, a, z) => arr.slice(a, z).reduce((s, x) => s + (x || 0), 0);
+  const cols = (fn, out, inn, tot) => holes.map((h, k) => `<td>${fn(h, k)}</td>${split && k === 8 ? `<td class="sum">${out}</td>` : ''}`).join('') + (split ? `<td class="sum">${inn}</td>` : '') + `<td class="sum">${tot}</td>`;
+  const pars = holes.map((h) => h.par);
+  return `<div class="cardtbl"><table>
+    <tr><th>Hole</th>${holes.map((_, k) => `<th>${k + 1}</th>${split && k === 8 ? '<th class="sum">Out</th>' : ''}`).join('')}${split ? '<th class="sum">In</th>' : ''}<th class="sum">Tot</th></tr>
+    ${ys ? `<tr><td>${teeDot(t.name)}${esc(t.name)}</td>${cols((h, k) => ys[k], sum(ys, 0, 9), sum(ys, 9, 18), sum(ys, 0, n))}</tr>` : ''}
+    <tr><td>Par</td>${cols((h) => h.par, sum(pars, 0, 9), sum(pars, 9, 18), sum(pars, 0, n))}</tr>
+    <tr><td class="faint">Hcp</td>${cols((h) => `<span class="faint">${h.hcp ?? ''}</span>`, '', '', '')}</tr>
+  </table></div>`;
+}
+function briefCourse(b, c) {
+  const info = c.info;
+  if (!info) return `<div class="bline"><span class="ic">${icon('flag')}</span><div class="grow small-text dim">No scorecard on file for this course yet. Add pars and notes from <a href="#/course/${c.id}">the course page</a>.</div></div>`;
+  const tee = ui.tee[c.id] || (info.tees.find((t) => t.name.toLowerCase() === (S.me.tee || '').toLowerCase()) || info.tees[Math.min(1, info.tees.length - 1)])?.name;
+  const t = info.tees.find((x) => x.name === tee) || info.tees[0];
+  const hardest = info.holes.reduce((a, h, k) => (h.hcp === 1 ? k + 1 : a), null);
+  return `<div class="bline"><span class="ic">${icon('flag')}</span><div class="grow">
+      <div class="row"><span class="mid grow">Par ${info.par}${t ? ` · ${t.yards.toLocaleString()} yds` : ''}</span>${t ? `<span class="small-text dim">${t.rating} / ${t.slope}</span>` : ''}</div>
+      <div class="small-text dim">${info.holes.length} holes${info.built ? ` · opened ${info.built}` : ''}${hardest ? ` · hardest: #${hardest}` : ''}</div></div></div>
+    ${info.tees.length ? `<div class="tees" style="margin-top:12px">${info.tees.map((x) => `<button class="${x.name === tee ? 'on' : ''}" data-act="pick-tee" data-c="${c.id}" data-v="${esc(x.name)}"><span>${teeDot(x.name)}${esc(x.name)}</span><b class="num">${x.yards.toLocaleString()}</b></button>`).join('')}</div>` : ''}
+    <details style="margin-top:8px"><summary>Hole-by-hole scorecard</summary>${scorecardTable(info, tee)}</details>
+    ${info.notes?.length ? `<div class="over" style="margin:14px 0 8px">Good to know</div><ul class="fyi">${info.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    ${info.source ? `<div class="tiny faint">Scorecard: ${esc(info.source)}</div>` : ''}`;
 }
 
 function viewBooking(id) {
   const b = S.bookings.find((x) => x.id === id);
   if (!b) return frame({ title: 'Tee time', back: '#/', tab: 'tee', body: `<div class="card empty">That tee time isn't here any more.</div>` });
-  const c = S.courses.find((x) => x.id === b.courseId) || {};
+  const c = courseOf(b);
+  const br = loadBrief(b.id);
   const mine = b.roster.find((r) => r.userId === S.me.id);
   const exps = S.expenses.filter((e) => e.bookingId === b.id);
   const round = S.rounds.find((r) => r.bookingId === b.id);
   const ids = b.roster.map((r) => r.userId);
   const due = Math.max(0, b.total - b.deposit);
   const cancelled = b.status === 'cancelled';
+  const upcoming = !cancelled && b.teeAt > Date.now() - 6 * HOUR;
+  const website = c.website || c.bookUrl;
   return frame({
-    title: b.course, back: '#/', tab: 'tee',
-    body: `<section class="card">
-      <div class="hero">${fDay(b.teeAt)} · ${fTime(b.teeAt)}</div>
-      <div class="dim" style="margin:4px 0 10px">${b.holes} holes · ${b.players} players · booked by ${esc(user(b.bookerId).name)}</div>
-      <div class="who">${deadlinePill(b)}</div>
-      ${!cancelled && b.teeAt > Date.now() ? `<label>Are you playing?</label>
-      <div class="seg"><button data-act="rsvp" data-v="in" class="${mine?.rsvp !== 'out' && mine ? 'on' : ''}">✅ I'm in</button><button data-act="rsvp" data-v="out" class="${mine?.rsvp === 'out' ? 'on' : ''}">❌ Can't make it</button></div>` : ''}
-      <div class="who" style="margin-top:10px">${rosterChips(b)}</div>
+    title: '', back: '#/', tab: 'tee', right: `<a class="btn quiet" href="#/b/${b.id}/edit" aria-label="Edit">${icon('edit')}</a>`,
+    body: `<section class="headline">
+      <div class="row"><span class="over grow">${esc(until(b.teeAt))}</span>${deadlinePill(b)}</div>
+      <div class="course">${esc(b.course)}</div>
+      <div class="when">${fLongDay(b.teeAt)} · ${fTime(b.teeAt)}</div>
+      <div class="small-text dim" style="margin-top:6px">${b.holes} holes · ${b.players} players · booked by ${esc(first(b.bookerId))}</div>
     </section>
-    <section class="actions">
-      <a class="btn" href="${mapsUrl(b)}" target="_blank" rel="noopener">🧭 Directions</a>
-      <a class="btn" href="${gcalUrl(b)}" target="_blank" rel="noopener">📅 Add to Calendar</a>
-      ${c.phone ? `<a class="btn" href="tel:${esc(c.phone.replace(/[^\d+]/g, ''))}">📞 Call course</a>` : ''}
-      ${c.bookUrl ? `<a class="btn" href="${esc(c.bookUrl)}" target="_blank" rel="noopener">🔗 Booking site</a>` : ''}
+    <section class="quick">
+      <a class="btn" href="${mapsUrl(b)}" target="_blank" rel="noopener">${icon('nav')}Directions</a>
+      ${c.phone ? `<a class="btn" href="${telUrl(c.phone)}">${icon('phone')}Call</a>` : `<button disabled>${icon('phone')}Call</button>`}
+      ${website ? `<a class="btn" href="${esc(website)}" target="_blank" rel="noopener">${icon('globe')}Website</a>` : `<button disabled>${icon('globe')}Website</button>`}
+      <a class="btn" href="${gcalUrl(b)}" target="_blank" rel="noopener">${icon('cal')}Calendar</a>
     </section>
-    <section class="card"><h2>Details</h2><div class="kv">
+    ${!cancelled && b.teeAt > Date.now() ? `<section class="card"><div class="row"><span class="grow"><b>Are you playing?</b></span></div>
+      <div class="seg" style="margin-top:10px"><button data-act="rsvp" data-v="in" class="${mine && mine.rsvp !== 'out' ? 'on' : ''}">I'm in</button><button data-act="rsvp" data-v="out" class="${mine?.rsvp === 'out' ? 'on' : ''}">Can't make it</button></div>
+      <div class="who" style="margin-top:10px">${rosterChips(b)}</div></section>` : ''}
+    ${upcoming ? `<section class="card"><div class="card-head"><h2>Round brief</h2>${br ? `<button class="quiet chip" data-act="brief-refresh" data-id="${b.id}" aria-label="Refresh">↻</button>` : ''}</div>
+      <div class="brief-sec">${briefWeather(b, br?.weather)}</div>
+      ${br?.sun ? `<div class="brief-sec">${briefDaylight(b, br.sun)}</div>` : ''}
+      ${b.teeAt > Date.now() ? `<div class="brief-sec">${briefLeave(b, br?.leave)}</div>` : ''}
+      ${briefWake(b, br?.wake) ? `<div class="brief-sec">${briefWake(b, br?.wake)}</div>` : ''}
+      <div class="brief-sec">${briefCourse(b, c)}</div>
+    </section>` : c.info ? `<section class="card"><div class="card-head"><h2>The course</h2></div>${briefCourse(b, c)}</section>` : ''}
+    <section class="card"><div class="card-head"><h2>Booking</h2></div><div class="kv">
       ${b.cancelAt ? `<span>Free cancel until</span><span>${fWhen(b.cancelAt)}</span>` : ''}
-      ${b.confirmation ? `<span>Confirmation</span><span><button class="small" data-act="copy" data-v="${esc(b.confirmation)}">${esc(b.confirmation)} ⧉</button></span>` : ''}
-      <span>Total cost</span><span>${b.total ? money(b.total) : '<span class="dim">not entered</span>'}</span>
-      <span>Deposit</span><span>${b.deposit ? `${money(b.deposit)} paid by ${esc(first(b.bookerId))}, split ${ids.length} ways` : '<span class="dim">none</span>'}</span>
-      ${b.total ? `<span>Due at course</span><span>${money(due)}</span>` : ''}
+      ${b.confirmation ? `<span>Confirmation</span><span><button class="chip" data-act="copy" data-v="${esc(b.confirmation)}">${esc(b.confirmation)} ${icon('copy', 'sm')}</button></span>` : ''}
+      <span>Total cost</span><span class="num">${b.total ? money(b.total) : '<span class="faint">not entered</span>'}</span>
+      <span>Deposit</span><span>${b.deposit ? `${money(b.deposit)} by ${esc(first(b.bookerId))}, split ${ids.length} ways` : '<span class="faint">none</span>'}</span>
+      ${b.total ? `<span>Due at course</span><span class="num">${money(due)}</span>` : ''}
       ${b.address ? `<span>Address</span><span>${esc(b.address)}</span>` : ''}
       ${b.source ? `<span>Added from</span><span>${esc(b.source)}</span>` : ''}
-    </div>${b.notes ? `<p class="small-text" style="white-space:pre-wrap;margin:12px 0 0">${esc(b.notes)}</p>` : ''}</section>
-    <section class="card"><h2>Money for this round</h2>
+    </div>${b.notes ? `<p class="small-text dim" style="white-space:pre-wrap;margin:12px 0 0">${esc(b.notes)}</p>` : ''}</section>
+    <section class="card"><div class="card-head"><h2>Money</h2></div>
       <div class="list">${exps.length ? exps.map(expenseLine).join('') : `<div class="empty">Nothing yet.</div>`}</div>
-      <div class="chips" style="margin-top:10px">
-        <a class="btn small primary" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Green fees')}${due ? `&amt=${dollars(due)}` : ''}">＋ Paid at the course</a>
-        <a class="btn small" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Food & drinks')}">＋ Food &amp; drinks</a>
-        <a class="btn small" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Pro shop')}">＋ Pro shop</a>
-        <a class="btn small" href="#/money/add?b=${b.id}">＋ Other</a>
+      <div class="chips" style="margin-top:12px">
+        <a class="btn chip primary" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Green fees')}${due ? `&amt=${dollars(due)}` : ''}">Paid at the course</a>
+        <a class="btn chip" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Food & drinks')}">Food &amp; drinks</a>
+        <a class="btn chip" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Pro shop')}">Pro shop</a>
+        <a class="btn chip" href="#/money/add?b=${b.id}">Other</a>
       </div></section>
-    <section class="card"><h2>Scorecard</h2>${round ? `${roundSummary(round)}<a class="btn block" style="margin-top:10px" href="#/r/${round.id}">Open scorecard</a>`
-      : `<button class="block" data-act="start-round" data-id="${b.id}">📋 Start a scorecard</button>`}</section>
+    <section class="card"><div class="card-head"><h2>Scorecard</h2></div>${round ? `${roundSummary(round)}<div class="row" style="margin-top:12px"><a class="btn grow" href="#/r/${round.id}">Open scorecard</a><a class="btn grow" href="#/r/${round.id}/shots">${icon('target')}Track shots</a></div>`
+      : `<button class="block" data-act="start-round" data-id="${b.id}">${icon('card')}Start a scorecard</button>`}</section>
     <section class="row">
-      <a class="btn grow" href="#/b/${b.id}/edit">✏️ Edit</a>
-      ${cancelled ? `<button class="grow" data-act="restore" data-id="${b.id}">↩️ Un-cancel</button>` : `<button class="danger grow" data-act="cancel" data-id="${b.id}">🚫 Mark cancelled</button>`}
-      ${b.createdBy === S.me.id || S.me.admin ? `<button class="ghost" data-act="delete-booking" data-id="${b.id}">Delete</button>` : ''}
+      ${cancelled ? `<button class="grow" data-act="restore" data-id="${b.id}">Un-cancel</button>` : `<button class="danger grow" data-act="cancel" data-id="${b.id}">Mark cancelled</button>`}
+      ${b.createdBy === S.me.id || S.me.admin ? `<button class="quiet" data-act="delete-booking" data-id="${b.id}">Delete</button>` : ''}
     </section>`,
   });
 }
@@ -189,11 +369,11 @@ function viewForm(id) {
   return frame({
     title: editing ? 'Edit tee time' : 'New tee time', back: editing ? `#/b/${id}` : '#/', tab: 'tee',
     body: `${editing ? '' : `<section class="card"><h2>Paste the confirmation</h2>
-      <textarea id="paste" placeholder="Paste the confirmation email here (L.A. City, GolfNow, foreUP or anything else) and tap Read it.">${esc(f.paste)}</textarea>
-      <div class="row" style="margin-top:8px"><button class="primary" data-act="read-paste">Read it</button><button data-act="paste-clip">Paste from clipboard</button></div>
-      <p class="dim small-text" style="margin:8px 0 0">Tip: in Gmail, long-press the email text → Select all → Share → GolfBuddy.</p></section>`}
+      <textarea id="paste" placeholder="Paste the confirmation email (L.A. City, GolfNow, foreUP or anything else) and tap Read it.">${esc(f.paste)}</textarea>
+      <div class="row" style="margin-top:10px"><button class="primary" data-act="read-paste">Read it</button><button class="outline" data-act="paste-clip">Paste from clipboard</button></div>
+      <p class="tiny faint" style="margin:10px 0 0">Tip: in Gmail, long-press the email text › Select all › Share › GolfBuddy.</p></section>`}
     <section class="card" id="bf">
-      <label for="f-course">Course</label><input id="f-course" list="courses" value="${esc(f.course)}" placeholder="Rancho Park" autocomplete="off">
+      <label for="f-course" style="margin-top:0">Course</label><input id="f-course" list="courses" value="${esc(f.course)}" placeholder="Rancho Park" autocomplete="off">
       <datalist id="courses">${S.courses.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>
       <div class="grid2"><div><label for="f-date">Date</label><input id="f-date" type="date" value="${esc(f.date)}"></div>
         <div><label for="f-time">Tee time</label><input id="f-time" type="time" value="${esc(f.time)}"></div></div>
@@ -207,8 +387,8 @@ function viewForm(id) {
         <div><label for="f-conf">Confirmation #</label><input id="f-conf" value="${esc(f.confirmation)}"></div></div>
       <label for="f-address">Address (for directions)</label><input id="f-address" value="${esc(f.address)}">
       <label for="f-notes">Notes</label><textarea id="f-notes" rows="3">${esc(f.notes)}</textarea>
-      <button class="primary block" style="margin-top:14px" data-act="save-booking">${editing ? 'Save changes' : 'Add tee time'}</button>
-      <p class="dim small-text" style="margin:8px 0 0">The deposit is split evenly among the people above and shows up in Money right away. Everyone else on it gets a notification.</p>
+      <button class="primary block" style="margin-top:16px" data-act="save-booking">${editing ? 'Save changes' : 'Add tee time'}</button>
+      <p class="tiny faint" style="margin:10px 0 0">The deposit is split evenly among the people above and shows up in Money right away. Everyone else on it gets a notification.</p>
     </section>`,
   });
 }
@@ -251,11 +431,39 @@ async function saveBooking() {
     cancelHours: Number(f.cancelHours), confirmation: f.confirmation, address: f.address, notes: f.notes, source: f.source };
   try {
     const r = f.id ? await api('PUT', `/api/bookings/${f.id}`, body) : await api('POST', '/api/bookings', body);
-    ui.form = null;
+    ui.form = null; delete ui.briefs[r.booking.id];
     await refresh(false);
     toast(f.id ? 'Saved' : 'Tee time added');
     go(`#/b/${r.booking.id}`);
   } catch (e) { toast(e.message); }
+}
+
+// ---------- ranges & simulators ----------
+function viewPractice() {
+  const P = ui.practice || (ui.practice = { kind: 'all', data: null, loading: false, where: null });
+  const list = (P.data?.places || []).filter((p) => P.kind === 'all' || p.kind === P.kind);
+  const body = !S.features.google ? `<div class="card note">This needs the Google key, added once in Me › Admin.</div>`
+    : `<section class="card"><div class="row"><span class="grow small-text dim">${P.where === 'here' ? 'Near where you are now' : P.where === 'home' ? 'Near your home' : 'Pick a starting point'}</span></div>
+        <div class="row" style="margin-top:10px"><button class="grow ${P.where === 'here' ? 'primary' : ''}" data-act="practice-here">${icon('locate')}Near me</button>
+        <button class="grow ${P.where === 'home' ? 'primary' : ''}" data-act="practice-home" ${S.me.homeSet ? '' : 'disabled'}>${icon('user')}Near home</button></div>
+        ${S.me.homeSet ? '' : `<div class="tiny faint" style="margin-top:8px">Add your home address in <a href="#/me">Me</a> to search from home.</div>`}</section>
+      ${P.data ? `<div class="seg"><button data-act="practice-kind" data-v="all" class="${P.kind === 'all' ? 'on' : ''}">All</button><button data-act="practice-kind" data-v="range" class="${P.kind === 'range' ? 'on' : ''}">Ranges</button><button data-act="practice-kind" data-v="sim" class="${P.kind === 'sim' ? 'on' : ''}">Simulators</button></div>
+      <section class="card flush list">${list.length ? list.map((p) => `<a class="link-row" href="${esc(p.url || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name + ' ' + p.address)}`)}" target="_blank" rel="noopener">
+        <span class="ic">${icon(p.kind === 'sim' ? 'target' : 'flag')}</span><span class="grow"><b>${esc(p.name)}</b><div class="small-text dim">${esc(p.address)}</div></span><span class="small-text brass nowrap num">${p.miles} mi</span></a>`).join('')
+        : `<div class="empty">Nothing within 30 miles.</div>`}</section>` : P.loading ? `<div class="card empty">Looking…</div>` : ''}`;
+  return frame({ title: 'Ranges & simulators', back: '#/', tab: 'tee', body });
+}
+async function loadPractice(where) {
+  const P = ui.practice; P.where = where; P.loading = true; P.data = null; render();
+  try {
+    let qs = '';
+    if (where === 'here') {
+      const pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy: false, timeout: 15000, maximumAge: 5 * MIN }));
+      qs = `?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`;
+    }
+    P.data = await api('GET', `/api/practice${qs}`);
+  } catch (e) { toast(e.code === 1 ? 'Location is blocked for this site' : e.message || 'Could not get your location'); P.where = null; }
+  P.loading = false; render();
 }
 
 // ---------- money ----------
@@ -265,16 +473,16 @@ function expenseLine(e) {
   const b = e.bookingId && S.bookings.find((x) => x.id === e.bookingId);
   const who = Object.keys(e.split).map(Number);
   const canDel = !e.auto && (e.createdBy === S.me.id || e.paidBy === S.me.id || S.me.admin);
-  return `<div class="line"><div class="grow"><div><b>${esc(e.category)}</b>${e.description && e.category !== 'Deposit' ? ` · ${esc(e.description)}` : ''}</div>
-    <div class="dim small-text">${money(e.amount)} paid by ${esc(first(e.paidBy))} · for ${who.map((id) => esc(first(id))).join(', ')}${b ? ` · ${esc(b.course)} ${fDay(b.teeAt)}` : ` · ${fDay(e.ts)}`}</div></div>
-    <div class="amt num ${effect > 0 ? 'pos' : effect < 0 ? 'neg' : 'dim'}">${effect ? (effect > 0 ? '+' : '') + money(effect) : '—'}</div>
+  return `<div class="line"><div class="grow"><div><b>${esc(e.category)}</b>${e.description && e.category !== 'Deposit' ? ` <span class="dim">· ${esc(e.description)}</span>` : ''}</div>
+    <div class="tiny faint">${money(e.amount)} paid by ${esc(first(e.paidBy))} · for ${who.map((id) => esc(first(id))).join(', ')}${b ? ` · ${esc(b.course)} ${fDay(b.teeAt)}` : ` · ${fDay(e.ts)}`}</div></div>
+    <div class="amt num ${effect > 0 ? 'pos' : effect < 0 ? 'neg' : 'faint'}">${effect ? (effect > 0 ? '+' : '') + money(effect) : '—'}</div>
     ${canDel ? `<button class="x" data-act="del-exp" data-id="${e.id}" aria-label="Delete">✕</button>` : '<span style="width:30px"></span>'}</div>`;
 }
 function settlementLine(s) {
   const effect = s.fromId === S.me.id ? s.amount : s.toId === S.me.id ? -s.amount : 0;
-  return `<div class="line"><div class="grow"><div><b>🤝 Settled</b> · ${esc(first(s.fromId))} → ${esc(first(s.toId))}</div>
-    <div class="dim small-text">${money(s.amount)} by ${esc(s.method === 'venmo' ? 'Venmo' : s.method)} · ${fDay(s.ts)}</div></div>
-    <div class="amt num ${effect > 0 ? 'pos' : effect < 0 ? 'neg' : 'dim'}">${effect ? (effect > 0 ? '+' : '') + money(effect) : '—'}</div>
+  return `<div class="line"><div class="grow"><div><b>Settled</b> <span class="dim">· ${esc(first(s.fromId))} → ${esc(first(s.toId))}</span></div>
+    <div class="tiny faint">${money(s.amount)} by ${esc(s.method === 'venmo' ? 'Venmo' : s.method)} · ${fDay(s.ts)}</div></div>
+    <div class="amt num ${effect > 0 ? 'pos' : effect < 0 ? 'neg' : 'faint'}">${effect ? (effect > 0 ? '+' : '') + money(effect) : '—'}</div>
     <button class="x" data-act="del-set" data-id="${s.id}" aria-label="Undo">✕</button></div>`;
 }
 function transferRow(t) {
@@ -283,14 +491,14 @@ function transferRow(t) {
   let buttons = '';
   if (iPay) {
     const v = user(t.toId).venmo;
-    buttons = `${v ? `<a class="btn primary" href="${venmoUrl(v, t.amount, note)}" target="_blank" rel="noopener" data-act="venmo" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Pay with Venmo</a>` : `<span class="dim small-text">${esc(first(t.toId))} hasn't added a Venmo username yet</span>`}
-      <button data-act="mark-paid" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Mark paid</button>`;
+    buttons = `${v ? `<a class="btn primary grow" href="${venmoUrl(v, t.amount, note)}" target="_blank" rel="noopener" data-act="venmo" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Pay with Venmo</a>` : `<span class="tiny faint grow">${esc(first(t.toId))} hasn't added a Venmo username yet</span>`}
+      <button class="outline" data-act="mark-paid" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Mark paid</button>`;
   } else if (iGet) {
     const v = user(t.fromId).venmo;
-    buttons = `${v ? `<a class="btn" href="${venmoUrl(v, t.amount, note, 'charge')}" target="_blank" rel="noopener">Request on Venmo</a>` : ''}
-      <button data-act="mark-paid" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Mark received</button>`;
+    buttons = `${v ? `<a class="btn grow" href="${venmoUrl(v, t.amount, note, 'charge')}" target="_blank" rel="noopener">Request on Venmo</a>` : ''}
+      <button class="outline" data-act="mark-paid" data-from="${t.fromId}" data-to="${t.toId}" data-amt="${t.amount}">Mark received</button>`;
   }
-  return `<div class="owe"><div class="row"><span class="grow"><b>${esc(first(t.fromId))}</b> ${iPay ? 'owe' : 'owes'} <b>${esc(iGet ? 'you' : first(t.toId))}</b></span><span class="balance num" style="font-size:22px">${money(t.amount)}</span></div>
+  return `<div class="owe"><div class="row"><span class="grow">${esc(first(t.fromId))} ${iPay ? 'owe' : 'owes'} ${esc(iGet ? 'you' : first(t.toId))}</span><span class="mid num">${money(t.amount)}</span></div>
     ${buttons ? `<div class="row">${buttons}</div>` : ''}</div>`;
 }
 function viewMoney() {
@@ -299,13 +507,13 @@ function viewMoney() {
   const p = ui.pendingPay;
   return frame({
     title: 'Money', tab: 'money',
-    body: `${p ? `<section class="card"><b>Did the Venmo payment go through?</b><div class="dim small-text">${money(p.amount)} to ${esc(user(p.toId).name)}. GolfBuddy can't see Venmo, so tell it.</div>
-      <div class="row" style="margin-top:10px"><button class="primary" data-act="pending-yes">Yes, mark paid</button><button data-act="pending-no">Not yet</button></div></section>` : ''}
-    <section class="card"><h2>Where you stand</h2>
-      <div class="balance num ${b > 0 ? 'pos' : b < 0 ? 'neg' : ''}">${b > 0 ? `You're owed ${money(b)}` : b < 0 ? `You owe ${money(-b)}` : 'All square ✅'}</div>
+    body: `${p ? `<section class="card"><b>Did the Venmo payment go through?</b><div class="small-text dim">${money(p.amount)} to ${esc(user(p.toId).name)}. GolfBuddy can't see Venmo, so tell it.</div>
+      <div class="row" style="margin-top:12px"><button class="primary" data-act="pending-yes">Yes, mark paid</button><button class="outline" data-act="pending-no">Not yet</button></div></section>` : ''}
+    <section class="card"><div class="over">Where you stand</div>
+      <div class="balance num ${b > 0 ? 'pos' : b < 0 ? 'neg' : ''}" style="margin:6px 0 4px">${b > 0 ? `You're owed ${money(b)}` : b < 0 ? `You owe ${money(-b)}` : 'All square'}</div>
       <div class="list">${S.transfers.map(transferRow).join('')}</div></section>
-    <a class="btn primary block" href="#/money/add">＋ Add an expense</a>
-    <section class="card"><h2>History</h2><div class="list">${hist.length ? hist.map((h) => h.html).join('') : `<div class="empty">Deposits, green fees, food and pro-shop buys land here.</div>`}</div></section>`,
+    <a class="btn primary block" href="#/money/add">${icon('plus')} Add an expense</a>
+    <section class="card"><div class="card-head"><h2>History</h2></div><div class="list">${hist.length ? hist.map((h) => h.html).join('') : `<div class="empty">Deposits, green fees, food and pro-shop buys land here.</div>`}</div></section>`,
   });
 }
 function viewAddExpense(q) {
@@ -319,16 +527,16 @@ function viewAddExpense(q) {
   return frame({
     title: 'Add an expense', back: x.bookingId ? `#/b/${x.bookingId}` : '#/money', tab: 'money',
     body: `<section class="card" id="xf">
-      <label>What for</label><div class="chips">${S.categories.filter((c) => c !== 'Deposit').map((c) => `<button class="chip ${x.category === c ? 'on' : ''}" data-act="x-cat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      <label style="margin-top:0">What for</label><div class="chips">${S.categories.filter((c) => c !== 'Deposit').map((c) => `<button class="chip ${x.category === c ? 'on' : ''}" data-act="x-cat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
       <div class="grid2"><div><label for="x-amt">Amount ($)</label><input id="x-amt" inputmode="decimal" value="${esc(x.amount)}" placeholder="0.00"></div>
         <div><label for="x-paid">Paid by</label><select id="x-paid">${S.users.map((u) => `<option value="${u.id}" ${u.id === x.paidBy ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div></div>
       <label for="x-desc">Note (optional)</label><input id="x-desc" value="${esc(x.description)}" placeholder="Burgers at the turn">
       <label>Split</label><div class="seg"><button data-act="x-mode" data-v="even" class="${x.mode === 'even' ? 'on' : ''}">Evenly</button><button data-act="x-mode" data-v="full" class="${x.mode === 'full' ? 'on' : ''}">All for one</button><button data-act="x-mode" data-v="custom" class="${x.mode === 'custom' ? 'on' : ''}">Amounts</button></div>
-      <div style="margin-top:8px">${x.mode === 'even' ? `<div class="chips">${S.users.map((u) => `<button class="chip ${x.ids.includes(u.id) ? 'on' : ''}" data-act="x-id" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>`
+      <div style="margin-top:10px">${x.mode === 'even' ? `<div class="chips">${S.users.map((u) => `<button class="chip ${x.ids.includes(u.id) ? 'on' : ''}" data-act="x-id" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>`
         : x.mode === 'full' ? `<label for="x-full">It was all for</label><select id="x-full">${S.users.map((u) => `<option value="${u.id}" ${u.id === x.full ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>`
         : S.users.map((u) => `<label for="x-sh-${u.id}">${esc(u.name)}'s share ($)</label><input id="x-sh-${u.id}" data-share="${u.id}" inputmode="decimal" value="${esc(x.shares[u.id] || '')}">`).join('')}</div>
       <label for="x-b">Tee time (optional)</label><select id="x-b"><option value="">None</option>${recent.map((b) => `<option value="${b.id}" ${String(b.id) === String(x.bookingId) ? 'selected' : ''}>${esc(b.course)} · ${fDay(b.teeAt)}</option>`).join('')}</select>
-      <button class="primary block" style="margin-top:14px" data-act="save-exp">Add it</button></section>`,
+      <button class="primary block" style="margin-top:16px" data-act="save-exp">Add it</button></section>`,
   });
 }
 function readExpInputs() {
@@ -361,7 +569,7 @@ function totals(r, s) {
 const toParText = (d) => (d === 0 ? 'E' : d > 0 ? `+${d}` : `${d}`);
 function orderedScores(r) { return [...r.scores].sort((a, b) => S.users.findIndex((u) => u.id === a.userId) - S.users.findIndex((u) => u.id === b.userId)); }
 function roundSummary(r) {
-  return `<div class="row">${orderedScores(r).map((s) => { const t = totals(r, s); return `<span class="pill ${t.toPar < 0 ? 'ok' : ''}">${esc(first(s.userId))}: ${t.n ? `${t.strokes} (${toParText(t.toPar)})${t.n < r.holes ? ` thru ${t.n}` : ''}` : '—'}</span>`; }).join('')}</div>`;
+  return `<div class="row">${orderedScores(r).map((s) => { const t = totals(r, s); return `<span class="pill ${t.toPar < 0 ? 'ok' : ''} num">${esc(first(s.userId))} ${t.n ? `${t.strokes} (${toParText(t.toPar)})${t.n < r.holes ? ` thru ${t.n}` : ''}` : '—'}</span>`; }).join('')}</div>`;
 }
 function headToHead() {
   const out = [];
@@ -375,7 +583,7 @@ function headToHead() {
       if (ta.n !== r.holes || tb.n !== r.holes) continue;
       if (ta.strokes < tb.strokes) w++; else if (ta.strokes > tb.strokes) l++; else t++;
     }
-    if (w + l + t) out.push(`<div class="line"><span class="grow">You vs ${esc(u.name)}</span><b class="num">${w}–${l}${t ? `–${t}` : ''}</b></div>`);
+    if (w + l + t) out.push(`<div class="line"><span class="grow">You vs ${esc(u.name)}</span><span class="mid num">${w}–${l}${t ? `–${t}` : ''}</span></div>`);
   }
   return out.join('');
 }
@@ -384,21 +592,31 @@ function viewScores() {
   const n = ui.round;
   const h2h = headToHead();
   return frame({
-    title: 'Scores', tab: 'scores',
+    title: 'Rounds', tab: 'scores',
     body: `<section class="card">${n.open ? `<h2>New scorecard</h2>
       <label for="r-course">Course</label><input id="r-course" list="courses2" value="${esc(n.course)}" autocomplete="off"><datalist id="courses2">${S.courses.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>
       <div class="grid2"><div><label for="r-date">Date</label><input id="r-date" type="date" value="${esc(n.date)}"></div>
-      <div><label>Holes</label><div class="seg"><button data-act="r-holes" data-v="18" class="${n.holes === 18 ? 'on' : ''}">18</button><button data-act="r-holes" data-v="9" class="${n.holes === 9 && n.start === 1 ? 'on' : ''}">Front 9</button><button data-act="r-holes" data-v="9b" class="${n.holes === 9 && n.start === 10 ? 'on' : ''}">Back 9</button></div></div></div>
+      <div><label>Holes</label><div class="seg"><button data-act="r-holes" data-v="18" class="${n.holes === 18 ? 'on' : ''}">18</button><button data-act="r-holes" data-v="9" class="${n.holes === 9 && n.start === 1 ? 'on' : ''}">F9</button><button data-act="r-holes" data-v="9b" class="${n.holes === 9 && n.start === 10 ? 'on' : ''}">B9</button></div></div></div>
       <label>Players</label><div class="chips">${S.users.map((u) => `<button class="chip ${n.players.includes(u.id) ? 'on' : ''}" data-act="r-player" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
-      <button class="primary block" style="margin-top:14px" data-act="r-start">Start scoring</button>`
-      : `<button class="primary block" data-act="r-open">＋ New scorecard</button>`}</section>
-    ${h2h ? `<section class="card"><h2>Head to head</h2><div class="list">${h2h}</div><p class="dim small-text" style="margin:6px 0 0">Completed rounds only, gross strokes.</p></section>` : ''}
-    <section class="card"><h2>Rounds</h2><div class="list">${S.rounds.length ? S.rounds.map((r) => `<a class="line" style="color:inherit;text-decoration:none" href="#/r/${r.id}"><div class="grow"><b>${esc(r.course)}</b> <span class="dim small-text">${fDay(r.playedOn)} · ${r.holes === 9 ? (r.startHole === 10 ? 'back 9' : 'front 9') : '18'}</span>${roundSummary(r)}</div><span class="dim">›</span></a>`).join('')
+      <button class="primary block" style="margin-top:16px" data-act="r-start">Start scoring</button>`
+      : `<button class="primary block" data-act="r-open">${icon('plus')} New scorecard</button>`}</section>
+    <section class="card flush list"><a class="link-row" href="#/trends"><span class="ic">${icon('trend')}</span><span class="grow"><b>Your game</b><div class="small-text dim">Distance by club, misses, and scoring</div></span><span class="faint">${icon('chev')}</span></a></section>
+    ${h2h ? `<section class="card"><div class="card-head"><h2>Head to head</h2></div><div class="list">${h2h}</div><p class="tiny faint" style="margin:8px 0 0">Completed rounds only, gross strokes.</p></section>` : ''}
+    <section class="card"><div class="card-head"><h2>Rounds</h2></div><div class="list">${S.rounds.length ? S.rounds.map((r) => `<a class="line" href="#/r/${r.id}"><div class="grow"><div class="serif" style="font-size:16px">${esc(r.course)}</div><div class="tiny faint" style="margin-bottom:6px">${fDay(r.playedOn)} · ${r.holes === 9 ? (r.startHole === 10 ? 'back 9' : 'front 9') : '18 holes'}</div>${roundSummary(r)}</div><span class="faint">${icon('chev')}</span></a>`).join('')
       : `<div class="empty">No rounds yet. Start a scorecard from a tee time or here.</div>`}</div></section>`,
   });
 }
 async function startRound(body) {
   try { const r = await api('POST', '/api/rounds', body); await refresh(false); go(`#/r/${r.round.id}`); } catch (e) { toast(e.message); }
+}
+function holeFacts(r, holeNo) {
+  const c = S.courses.find((x) => x.id === r.courseId);
+  const info = c?.info, h = info?.holes?.[holeNo - 1];
+  if (!h) return '';
+  const tee = ui.tee[c.id] || (info.tees.find((t) => t.name.toLowerCase() === (S.me.tee || '').toLowerCase()) || info.tees[Math.min(1, info.tees.length - 1)])?.name;
+  const t = info.tees.find((x) => x.name === tee);
+  const y = t?.holes?.[holeNo - 1];
+  return `${y ? `${y} yds ${teeDot(t.name)}` : ''}${h.hcp ? ` · hcp ${h.hcp}` : ''}`;
 }
 function viewRound(id) {
   const r = S.rounds.find((x) => x.id === id);
@@ -408,27 +626,27 @@ function viewRound(id) {
   const par = r.pars[i] || 4;
   const sc = orderedScores(r);
   const done = (k) => sc.every((s) => s.strokes[k]);
-  const cell = (s, k) => { const x = s.strokes[k]; if (!x) return '<td class="dim">·</td>'; const d = x - (r.pars[k] || 4); return `<td><span class="${d < 0 ? 'birdie tag-under' : d > 0 ? 'tag-over' : ''}">${x}</span></td>`; };
+  const cell = (s, k) => { const x = s.strokes[k]; if (!x) return '<td class="faint">·</td>'; const d = x - (r.pars[k] || 4); return `<td><span class="${d < 0 ? 'birdie tag-under' : d > 0 ? 'tag-over' : ''}">${x}</span></td>`; };
   const sum = (arr, a, b) => arr.slice(a, b).reduce((t, x) => t + (x || 0), 0) || '';
   const split18 = r.holes === 18;
   return frame({
-    title: r.course, back: r.bookingId ? `#/b/${r.bookingId}` : '#/scores', tab: 'scores',
+    title: r.course, back: r.bookingId ? `#/b/${r.bookingId}` : '#/scores', tab: 'scores', right: `<a class="btn quiet" href="#/r/${r.id}/shots" aria-label="Shots">${icon('target')}</a>`,
     body: `<section class="card">
       <div class="holebar">${r.pars.map((_, k) => `<button class="${k === i ? 'on' : done(k) ? 'done' : ''}" data-act="hole" data-v="${k}">${r.startHole + k}</button>`).join('')}</div>
-      <div class="holehead"><span class="h">Hole ${holeNo}</span><button class="small" data-act="par" data-v="${i}">Par ${par} ↻</button></div>
-      <div class="list">${sc.map((s) => { const x = s.strokes[i]; return `<div class="score"><span class="who">${esc(user(s.userId).name)}</span>
-        <button data-act="stroke" data-u="${s.userId}" data-d="-1">−</button><span class="n num ${x ? '' : 'dim'}" data-act="stroke" data-u="${s.userId}" data-d="0">${x || par}</span><button data-act="stroke" data-u="${s.userId}" data-d="1">+</button></div>`; }).join('')}</div>
-      <p class="dim small-text" style="margin:4px 0 10px">A grey number is just the par: tap it to confirm, or use − / +.</p>
-      <div class="row"><button class="grow" data-act="hole" data-v="${Math.max(0, i - 1)}" ${i === 0 ? 'disabled' : ''}>‹ Hole ${holeNo - 1}</button><button class="grow primary" data-act="hole" data-v="${Math.min(r.holes - 1, i + 1)}" ${i === r.holes - 1 ? 'disabled' : ''}>Hole ${holeNo + 1} ›</button></div>
+      <div class="holehead"><div><div class="h">Hole ${holeNo}</div><div class="facts">${holeFacts(r, holeNo)}</div></div><button class="chip" data-act="par" data-v="${i}">Par ${par} ↻</button></div>
+      <div class="list">${sc.map((s) => { const x = s.strokes[i]; return `<div class="score"><span class="nm">${esc(user(s.userId).name)}</span>
+        <button data-act="stroke" data-u="${s.userId}" data-d="-1" aria-label="One less">−</button><span class="n num ${x ? '' : 'faint'}" data-act="stroke" data-u="${s.userId}" data-d="0">${x || par}</span><button data-act="stroke" data-u="${s.userId}" data-d="1" aria-label="One more">+</button></div>`; }).join('')}</div>
+      <p class="tiny faint" style="margin:4px 0 12px">A faint number is just the par: tap it to confirm, or use − / +.</p>
+      <div class="row"><button class="grow outline" data-act="hole" data-v="${Math.max(0, i - 1)}" ${i === 0 ? 'disabled' : ''}>‹ ${holeNo - 1}</button><a class="btn grow" href="#/r/${r.id}/shots">${icon('target')}Shots</a><button class="grow primary" data-act="hole" data-v="${Math.min(r.holes - 1, i + 1)}" ${i === r.holes - 1 ? 'disabled' : ''}>${holeNo + 1} ›</button></div>
     </section>
     <section class="card cardtbl"><table>
       <tr><th>Hole</th>${r.pars.map((_, k) => `<th>${r.startHole + k}</th>${split18 && k === 8 ? '<th class="sum">Out</th>' : ''}`).join('')}${split18 ? '<th class="sum">In</th>' : ''}<th class="sum">Tot</th></tr>
-      <tr><td class="dim">Par</td>${r.pars.map((p, k) => `<td class="dim">${p}</td>${split18 && k === 8 ? `<td class="sum dim">${sum(r.pars, 0, 9)}</td>` : ''}`).join('')}${split18 ? `<td class="sum dim">${sum(r.pars, 9, 18)}</td>` : ''}<td class="sum dim">${sum(r.pars, 0, r.holes)}</td></tr>
+      <tr><td>Par</td>${r.pars.map((p, k) => `<td class="faint">${p}</td>${split18 && k === 8 ? `<td class="sum faint">${sum(r.pars, 0, 9)}</td>` : ''}`).join('')}${split18 ? `<td class="sum faint">${sum(r.pars, 9, 18)}</td>` : ''}<td class="sum faint">${sum(r.pars, 0, r.holes)}</td></tr>
       ${sc.map((s) => `<tr><td>${esc(first(s.userId))}</td>${r.pars.map((_, k) => cell(s, k) + (split18 && k === 8 ? `<td class="sum">${sum(s.strokes, 0, 9)}</td>` : '')).join('')}${split18 ? `<td class="sum">${sum(s.strokes, 9, 18)}</td>` : ''}<td class="sum">${sum(s.strokes, 0, r.holes)}</td></tr>`).join('')}
-    </table><div style="margin-top:10px">${roundSummary(r)}</div></section>
-    <section class="card"><h2>Post to GHIN</h2><p class="dim small-text" style="margin-top:0">GHIN doesn't let personal apps post scores, so this copies your hole-by-hole scores for pasting or reading off in the GHIN app.</p>
-      <div class="row"><button data-act="ghin-copy" data-id="${r.id}">⧉ Copy my scores</button><a class="btn" href="https://www.ghin.com/" target="_blank" rel="noopener">Open GHIN</a></div></section>
-    <button class="ghost danger" data-act="del-round" data-id="${r.id}">Delete this scorecard</button>`,
+    </table><div style="margin-top:12px">${roundSummary(r)}</div></section>
+    <section class="card"><h2>Post to GHIN</h2><p class="small-text dim" style="margin-top:0">GHIN doesn't let personal apps post scores, so this copies your hole-by-hole scores to paste or read off in the GHIN app.</p>
+      <div class="row"><button class="outline" data-act="ghin-copy" data-id="${r.id}">${icon('copy', 'sm')} Copy my scores</button><a class="btn outline" href="https://www.ghin.com/" target="_blank" rel="noopener">Open GHIN</a></div></section>
+    <button class="quiet danger" data-act="del-round" data-id="${r.id}">Delete this scorecard</button>`,
   });
 }
 function firstOpenHole(r) { for (let k = 0; k < r.holes; k++) if (!r.scores.every((s) => s.strokes[k])) return k; return 0; }
@@ -442,56 +660,91 @@ function saveRoundSoon(r, payload) {
 // ---------- me ----------
 function viewMe() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  const me = S.me;
+  const teeNames = [...new Set(S.courses.flatMap((c) => c.info?.tees?.map((t) => t.name.split('/')[0]) || []))];
   return frame({
     title: 'Me', tab: 'me',
     body: `<section class="card" id="mf"><h2>Profile</h2>
-      <label for="m-name">Name</label><input id="m-name" value="${esc(S.me.name)}">
-      <label for="m-venmo">Venmo username (so your buddy can pay you in one tap)</label><input id="m-venmo" value="${esc(S.me.venmo)}" placeholder="without the @" autocapitalize="off">
-      <button class="primary block" style="margin-top:12px" data-act="save-me">Save</button></section>
+      <label for="m-name">Name</label><input id="m-name" value="${esc(me.name)}">
+      <label for="m-venmo">Venmo username</label><input id="m-venmo" value="${esc(me.venmo)}" placeholder="without the @" autocapitalize="off">
+      <label for="m-tee">Tees you usually play</label><select id="m-tee"><option value="">No preference</option>${teeNames.map((t) => `<option ${t === me.tee ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
+      <div class="over" style="margin:20px 0 2px">Getting there</div>
+      <label for="m-home">Home address <span class="faint">(only you see it; used for “leave by” times)</span></label><input id="m-home" value="${esc(me.home)}" placeholder="Street, city, ZIP" autocomplete="street-address">
+      <div class="grid2"><div><label for="m-arrive">Arrive early (minutes)</label><input id="m-arrive" inputmode="numeric" value="${esc(me.arriveMins)}"></div>
+      <div><label for="m-phone">Mobile number</label><input id="m-phone" inputmode="tel" value="${esc(me.phone)}" placeholder="(310) 555-0123" autocomplete="tel"></div></div>
+      <div class="row" style="margin-top:16px"><span class="grow"><b>Wake-up calls</b><div class="tiny faint">A phone call 30 minutes before you need to leave, for tee times before 8 a.m. Switch it off per tee time any time.</div></span>
+        <button class="switch ${me.wakeOk ? 'on' : ''}" data-act="me-wake" aria-label="Wake-up calls"></button></div>
+      <button class="primary block" style="margin-top:16px" data-act="save-me">Save</button></section>
     <section class="card"><h2>Notifications</h2>
-      <p class="small-text" style="margin-top:0">${S.push.mine ? `✅ On for ${S.push.mine} device${S.push.mine > 1 ? 's' : ''}.` : perm === 'denied' ? '🚫 Blocked. Allow notifications for this site in Chrome (lock icon › Permissions), then come back.' : perm === 'unsupported' ? 'This browser cannot do push notifications.' : 'Off on this device.'}
-      You'll hear about new or changed tee times, "still in?" ${S.remindHours}h before free cancellation ends, the evening before a round, and new expenses.</p>
-      <div class="row"><button class="primary" data-act="push-on">${S.push.mine ? 'Re-connect this device' : 'Turn on'}</button>${S.push.mine ? '<button data-act="push-test">Send a test</button>' : ''}</div></section>
-    <section class="card"><h2>App</h2>${installEvt ? `<button class="block" data-act="install">📲 Install GolfBuddy</button>` : `<p class="small-text dim" style="margin:0">To install: Chrome menu ⋮ › Add to Home screen (or Install app). Once installed, GolfBuddy shows up in Android's Share menu, so you can share a confirmation email straight into it.</p>`}</section>
-    <section class="card"><div class="row"><h2 class="grow" style="margin:0">Courses</h2><a class="btn small" href="#/course/new">＋ Add</a></div>
-      <div class="list" style="margin-top:8px">${S.courses.map((c) => `<a class="line" style="color:inherit;text-decoration:none" href="#/course/${c.id}"><div class="grow"><b>${esc(c.name)}</b><div class="dim small-text">Free cancel ${c.cancelHours}h before${c.pars ? ` · par ${c.pars.reduce((a, x) => a + x, 0)}` : ''}</div></div><span class="dim">›</span></a>`).join('')}</div></section>
-    ${S.me.admin ? `<section class="card"><h2>Admin</h2><div class="kv"><span>Invite code</span><span><button class="small" data-act="copy" data-v="${esc(S.invite)}">${esc(S.invite)} ⧉</button></span></div>
-      <label for="a-user">Reset someone's password</label><div class="row"><select id="a-user" class="grow">${S.users.filter((u) => u.id !== S.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
-      <input id="a-pass" class="grow" placeholder="new password"><button data-act="admin-pass">Set</button></div></section>` : ''}
+      <p class="small-text dim" style="margin-top:0">${S.push.mine ? `On for ${S.push.mine} device${S.push.mine > 1 ? 's' : ''}.` : perm === 'denied' ? 'Blocked. Allow notifications for this site in Chrome (lock icon › Permissions), then come back.' : perm === 'unsupported' ? 'This browser cannot do push notifications.' : 'Off on this device.'}
+      You'll hear about new or changed tee times, “still in?” ${S.remindHours}h before free cancellation ends, the evening before a round, and new expenses.</p>
+      <div class="row"><button class="primary" data-act="push-on">${S.push.mine ? 'Re-connect this device' : 'Turn on'}</button>${S.push.mine ? '<button class="outline" data-act="push-test">Send a test</button>' : ''}</div></section>
+    <section class="card flush list">
+      <a class="link-row" href="#/bag"><span class="ic">${icon('bag')}</span><span class="grow"><b>Your bag</b><div class="small-text dim">Clubs, balls, gloves, shoes and where to get support</div></span><span class="faint">${icon('chev')}</span></a>
+      <a class="link-row" href="#/courses"><span class="ic">${icon('flag')}</span><span class="grow"><b>Courses</b><div class="small-text dim">${S.courses.length} on file</div></span><span class="faint">${icon('chev')}</span></a>
+    </section>
+    <section class="card"><h2>App</h2>${installEvt ? `<button class="block" data-act="install">Install GolfBuddy</button>` : `<p class="small-text dim" style="margin:0">To install: Chrome menu ⋮ › Add to Home screen. Once installed, GolfBuddy shows up in Android's Share menu, so you can share a confirmation email straight into it.</p>`}</section>
+    ${me.admin ? viewAdmin() : ''}
     <section class="card"><h2>Password</h2><div class="grid2"><input id="p-old" type="password" placeholder="current"><input id="p-new" type="password" placeholder="new (6+)"></div>
-      <button class="block" style="margin-top:10px" data-act="change-pass">Change password</button></section>
-    <button class="ghost" data-act="logout">Log out</button>`,
+      <button class="block outline" style="margin-top:10px" data-act="change-pass">Change password</button></section>
+    <button class="quiet" data-act="logout">Log out</button>`,
+  });
+}
+function viewAdmin() {
+  const K = ui.keys;
+  if (!K) api('GET', '/api/admin/keys').then((r) => { ui.keys = r.keys; render(); }).catch(() => {});
+  const row = (k, label, hint, type = 'text') => `<label for="k-${k}">${label} ${K?.[k] ? `<span class="pill ok">set ${esc(K[k])}</span>` : '<span class="pill">not set</span>'}</label>
+    <input id="k-${k}" data-key="${k}" type="${type}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${K?.[k] ? 'Paste a new one to replace it' : esc(hint)}">`;
+  return `<section class="card"><h2>Admin</h2>
+    <div class="kv"><span>Invite code</span><span><button class="chip" data-act="copy" data-v="${esc(S.invite)}">${esc(S.invite)} ${icon('copy', 'sm')}</button></span></div>
+    <div class="over" style="margin:20px 0 0">Service keys</div>
+    <p class="tiny faint" style="margin:6px 0 0">Pasted here, stored on the NAS and never shown again (only the last 4 characters). Leave a box empty to keep what's there.</p>
+    ${row('google_server_key', 'Google server key', 'Routes API + Places API (New)', 'password')}
+    ${row('google_browser_key', 'Google browser key', 'Maps JavaScript API, limited to golf.juno.nexus/*', 'password')}
+    ${row('twilio_sid', 'Twilio Account SID', 'AC…')}
+    ${row('twilio_token', 'Twilio Auth Token', '', 'password')}
+    ${row('twilio_from', 'Twilio phone number', '+13105550123')}
+    <div class="row" style="margin-top:14px"><button class="primary grow" data-act="save-keys">Save keys</button><button class="outline" data-act="test-google" ${S.features.google ? '' : 'disabled'}>Test Google</button></div>
+    <label for="a-user" style="margin-top:22px">Reset someone's password</label><div class="row"><select id="a-user" class="grow">${S.users.filter((u) => u.id !== S.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+      <input id="a-pass" class="grow" placeholder="new password"><button class="outline" data-act="admin-pass">Set</button></div></section>`;
+}
+function viewCourses() {
+  return frame({
+    title: 'Courses', back: '#/me', tab: 'me', right: `<a class="btn quiet" href="#/course/new" aria-label="Add">${icon('plus')}</a>`,
+    body: `<section class="card flush list">${S.courses.map((c) => `<a class="link-row" href="#/course/${c.id}"><span class="ic">${icon('flag')}</span><span class="grow"><b>${esc(c.name)}</b><div class="small-text dim">${c.info ? `Par ${c.info.par} · ${c.info.holes.length} holes · ` : c.pars ? `Par ${c.pars.reduce((a, x) => a + x, 0)} · ` : ''}free cancel ${c.cancelHours}h before</div></span><span class="faint">${icon('chev')}</span></a>`).join('')}</section>`,
   });
 }
 function viewCourse(id) {
-  const c = id ? S.courses.find((x) => x.id === id) : { name: '', address: '', phone: '', cancelHours: 24, bookUrl: '', pars: null, notes: '' };
-  if (!c) return frame({ title: 'Course', back: '#/me', tab: 'me', body: '<div class="card empty">Not found.</div>' });
+  const c = id ? S.courses.find((x) => x.id === id) : { name: '', address: '', phone: '', cancelHours: 24, bookUrl: '', website: '', pars: null, notes: '' };
+  if (!c) return frame({ title: 'Course', back: '#/courses', tab: 'me', body: '<div class="card empty">Not found.</div>' });
   const pars = c.pars || Array(18).fill('');
   return frame({
-    title: id ? c.name : 'New course', back: '#/me', tab: 'me',
-    body: `<section class="card" id="cf">
+    title: id ? c.name : 'New course', back: '#/courses', tab: 'me',
+    body: `${c.info ? `<section class="card">${briefCourse({}, c)}</section>` : ''}
+    <section class="card" id="cf"><h2>Details</h2>
       <label for="c-name">Name</label><input id="c-name" value="${esc(c.name)}">
       <label for="c-address">Address</label><input id="c-address" value="${esc(c.address)}">
       <div class="grid2"><div><label for="c-phone">Phone</label><input id="c-phone" value="${esc(c.phone)}" inputmode="tel"></div>
       <div><label for="c-cancel">Free cancel (hours before)</label><input id="c-cancel" value="${esc(c.cancelHours)}" inputmode="numeric"></div></div>
+      <label for="c-web">Website</label><input id="c-web" value="${esc(c.website || '')}" placeholder="https://">
       <label for="c-url">Booking website</label><input id="c-url" value="${esc(c.bookUrl)}" placeholder="https://">
       <label>Pars, holes 1–18 (fills in new scorecards)</label>
       <div class="pars">${pars.map((p, k) => `<input data-par="${k}" value="${esc(p)}" inputmode="numeric" maxlength="1" aria-label="Hole ${k + 1} par">`).join('')}</div>
-      <label for="c-notes">Notes</label><textarea id="c-notes" rows="2">${esc(c.notes)}</textarea>
-      <button class="primary block" style="margin-top:12px" data-act="save-course" data-id="${id || ''}">Save</button></section>`,
+      <label for="c-notes">Your notes</label><textarea id="c-notes" rows="2">${esc(c.notes)}</textarea>
+      <button class="primary block" style="margin-top:14px" data-act="save-course" data-id="${id || ''}">Save</button></section>`,
   });
 }
 
 // ---------- login ----------
 function viewAuth() {
   const reg = ui.authMode === 'register';
-  return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1 style="text-align:center">GolfBuddy</h1>
-    <div class="seg" style="margin:14px 0 4px"><button data-act="auth-mode" data-v="login" class="${reg ? '' : 'on'}">Log in</button><button data-act="auth-mode" data-v="register" class="${reg ? 'on' : ''}">Create account</button></div>
+  return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1>Golf<i class="brass">Buddy</i></h1>
+    <div class="seg" style="margin:18px 0 4px"><button data-act="auth-mode" data-v="login" class="${reg ? '' : 'on'}">Log in</button><button data-act="auth-mode" data-v="register" class="${reg ? 'on' : ''}">Create account</button></div>
     <form id="authf"><label for="u">Username</label><input id="u" autocomplete="username" autocapitalize="off" required>
     ${reg ? '<label for="n">Your name</label><input id="n" placeholder="Mike">' : ''}
     <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required>
     ${reg ? '<label for="inv">Invite code</label><input id="inv" autocapitalize="off" required>' : ''}
-    <button class="primary block" style="margin-top:16px">${reg ? 'Create account' : 'Log in'}</button></form></main>`;
+    <button class="primary block" style="margin-top:18px">${reg ? 'Create account' : 'Log in'}</button></form></main>`;
 }
 
 // ---------- render & events ----------
@@ -507,14 +760,19 @@ function render() {
   else if (seg[0] === 'money' && seg[1] === 'add') html = viewAddExpense(q);
   else if (seg[0] === 'money' || seg[0] === 'ledger') html = viewMoney();
   else if (seg[0] === 'scores') html = viewScores();
+  else if (seg[0] === 'r' && seg[2] && extraViews[seg[2]]) html = extraViews[seg[2]](id, q);
   else if (seg[0] === 'r') html = viewRound(id);
   else if (seg[0] === 'me') html = viewMe();
+  else if (seg[0] === 'courses') html = viewCourses();
   else if (seg[0] === 'course') html = viewCourse(seg[1] === 'new' ? null : id);
+  else if (seg[0] === 'practice') html = viewPractice();
+  else if (extraViews[seg[0]]) html = extraViews[seg[0]](seg, q);
   else html = viewTeeTimes();
   app.innerHTML = html;
+  if (window.afterRender) window.afterRender();
 }
 // Screens with a half-filled form are not redrawn when fresh data arrives in the background.
-const busyForm = () => !!$('#bf, #xf, #cf, #mf') && document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+const busyForm = () => !!window.__scanning || (!!$('#bf, #xf, #cf, #mf, #gf') && document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
 async function refresh(draw = true) {
   try {
     const res = await fetch('/api/state', { credentials: 'include' });
@@ -552,6 +810,7 @@ document.addEventListener('change', (e) => {
   if (t.id === 'r-course' || t.id === 'r-date') { ui.round.course = $('#r-course').value; ui.round.date = $('#r-date').value; }
 });
 
+const handlers = {};   // extra click actions from track.js
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -560,6 +819,7 @@ document.addEventListener('click', async (e) => {
   const keepGoing = act === 'venmo'; // let the Venmo link open
   if (!keepGoing) e.preventDefault();
   try {
+    if (handlers[act]) { await handlers[act](el, seg); return; }
     switch (act) {
       case 'auth-mode': ui.authMode = v; render(); break;
       case 'toggle-past': ui.showPast = !ui.showPast; render(); break;
@@ -568,7 +828,14 @@ document.addEventListener('click', async (e) => {
       case 'install': if (installEvt) { installEvt.prompt(); installEvt = null; } break;
       case 'copy': await navigator.clipboard.writeText(v); toast('Copied'); break;
       // tee times
-      case 'rsvp': await api('POST', `/api/bookings/${seg[1]}/rsvp`, { rsvp: v }); await refresh(); toast(v === 'in' ? "You're in" : 'Marked you out. Your buddy was told.'); break;
+      case 'rsvp': await api('POST', `/api/bookings/${seg[1]}/rsvp`, { rsvp: v }); delete ui.briefs[seg[1]]; await refresh(); toast(v === 'in' ? "You're in" : 'Marked you out. Your buddy was told.'); break;
+      case 'brief-refresh': delete ui.briefs[el.dataset.id]; render(); break;
+      case 'wake-toggle': case 'wake-auto': {
+        const body = act === 'wake-auto' ? { wake: null } : { wake: v === '1' };
+        const r = await api('POST', `/api/bookings/${el.dataset.id}/wake`, body); delete ui.briefs[el.dataset.id]; await refresh();
+        toast(r.wake ? 'Wake-up call on' : 'Wake-up call off'); break;
+      }
+      case 'pick-tee': ui.tee[Number(el.dataset.c)] = v; render(); break;
       case 'cancel': if (confirm('Mark this tee time as cancelled? (Cancel it with the course too. The deposit stays split, since it is usually lost.)')) { await api('POST', `/api/bookings/${el.dataset.id}/cancel`, {}); await refresh(); } break;
       case 'restore': await api('POST', `/api/bookings/${el.dataset.id}/restore`, {}); await refresh(); break;
       case 'delete-booking': if (confirm('Delete this tee time and its deposit line completely?')) { await api('DELETE', `/api/bookings/${el.dataset.id}`); await refresh(false); go('#/'); } break;
@@ -578,6 +845,10 @@ document.addEventListener('click', async (e) => {
       case 'roster': { readFormInputs(); const id = Number(v), r = ui.form.roster; ui.form.roster = r.includes(id) ? r.filter((x) => x !== id) : [...r, id]; render(); break; }
       case 'save-booking': await saveBooking(); break;
       case 'start-round': { const b = S.bookings.find((x) => x.id === Number(el.dataset.id)); await startRound({ bookingId: b.id, holes: b.holes, startHole: /back 9/i.test(b.notes) ? 10 : 1, players: b.roster.filter((r) => r.rsvp !== 'out').map((r) => r.userId), playedOn: b.teeAt }); break; }
+      // practice
+      case 'practice-here': await loadPractice('here'); break;
+      case 'practice-home': await loadPractice('home'); break;
+      case 'practice-kind': ui.practice.kind = v; render(); break;
       // money
       case 'x-cat': readExpInputs(); ui.exp.category = v; render(); break;
       case 'x-mode': readExpInputs(); ui.exp.mode = v; render(); break;
@@ -623,15 +894,28 @@ document.addEventListener('click', async (e) => {
       }
       case 'del-round': if (confirm('Delete this scorecard?')) { await api('DELETE', `/api/rounds/${el.dataset.id}`); await refresh(false); go('#/scores'); } break;
       // me
-      case 'save-me': await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value }); await refresh(); toast('Saved'); break;
+      case 'me-wake': el.classList.toggle('on'); break;
+      case 'save-me': {
+        const wakeOk = $('[data-act="me-wake"]').classList.contains('on');
+        await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, home: $('#m-home').value, phone: $('#m-phone').value,
+          arriveMins: Number($('#m-arrive').value || 30), wakeOk });
+        ui.briefs = {}; await refresh(); toast('Saved'); break;
+      }
       case 'change-pass': await api('POST', '/api/me', { name: S.me.name, venmo: S.me.venmo, password: $('#p-old').value, newPassword: $('#p-new').value }); toast('Password changed'); $('#p-old').value = $('#p-new').value = ''; break;
       case 'admin-pass': await api('POST', '/api/admin/password', { userId: Number($('#a-user').value), password: $('#a-pass').value }); toast('Password set. Tell them the new one.'); break;
+      case 'save-keys': {
+        const body = {};
+        $$('[data-key]').forEach((i) => { if (i.value.trim()) body[i.dataset.key] = i.value.trim(); });
+        if (!Object.keys(body).length) { toast('Paste a key first'); break; }
+        const r = await api('POST', '/api/admin/keys', body); ui.keys = r.keys; ui.briefs = {}; await refresh(); toast('Keys saved'); break;
+      }
+      case 'test-google': { const r = await api('POST', '/api/admin/test-google', {}); toast(r.found ? `Google works: found ${r.found}` : 'Google answered, but found nothing'); break; }
       case 'save-course': {
         const pars = $$('[data-par]').map((x) => Number(x.value));
         const body = { name: $('#c-name').value, address: $('#c-address').value, phone: $('#c-phone').value, cancelHours: Number($('#c-cancel').value), bookUrl: $('#c-url').value,
-          notes: $('#c-notes').value, pars: pars.every((x) => !x) ? null : pars };
+          website: $('#c-web').value, notes: $('#c-notes').value, pars: pars.every((x) => !x) ? null : pars };
         const id = el.dataset.id;
-        await api(id ? 'PUT' : 'POST', id ? `/api/courses/${id}` : '/api/courses', body); await refresh(false); toast('Saved'); go('#/me');
+        await api(id ? 'PUT' : 'POST', id ? `/api/courses/${id}` : '/api/courses', body); await refresh(false); toast('Saved'); go('#/courses');
         break;
       }
       case 'logout': await api('POST', '/api/logout', {}); S = null; render(); break;
@@ -671,7 +955,7 @@ window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); inst
 navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.go) { const h = e.data.go.replace(/^\//, ''); location.hash = h.startsWith('#') ? h : '#/'; refresh(); } });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
-(async () => {
+window.addEventListener('DOMContentLoaded', async () => {
   // Something shared into the app from another app's Share menu arrives at /share?text=...
   if (location.pathname === '/share') {
     const q = new URLSearchParams(location.search);
@@ -681,4 +965,4 @@ setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60
   await refresh();
   if (!S) render();
   syncPush();
-})();
+});

@@ -1,0 +1,17 @@
+{
+  "_note": "Support contacts checked on each brand's own US site, Nov 2026. Brands without a confirmed number link to their support site instead.",
+  "support": {
+    "Titleist": { "phone": "(800) 333-4200", "hours": "Mon–Fri 9–5 ET", "url": "https://www.titleist.com/faqs", "covers": ["Titleist", "Scotty Cameron", "Vokey"] },
+    "Callaway": { "phone": "(800) 588-9836", "hours": "Mon–Fri 6–5 PT", "url": "https://www.callawaygolf.com/help/faqs", "covers": ["Callaway", "Odyssey", "OGIO"] },
+    "Cobra": { "phone": "(800) 917-3300", "hours": "Mon–Fri 6–2:30 PT", "url": "https://www.cobragolf.com/contact-us", "covers": ["Cobra", "Puma"] },
+    "Mizuno": { "phone": "(800) 966-1211", "url": "https://usa.mizuno.com/warranty-request-form/", "covers": ["Mizuno"] },
+    "FootJoy": { "phone": "(800) 224-8501", "hours": "Mon–Fri 8–5 ET", "url": "https://www.footjoy.com/help-center-faqs.html", "covers": ["FootJoy"] },
+    "Srixon": { "url": "https://support.dunlopsports.com/hc/en-us", "covers": ["Srixon", "Cleveland", "XXIO"] },
+    "TaylorMade": { "url": "https://www.taylormadegolf.com", "covers": ["TaylorMade"] },
+    "PING": { "url": "https://ping.com", "covers": ["PING"] }
+  },
+  "brands": ["Titleist", "Callaway", "TaylorMade", "PING", "Cobra", "Srixon", "Cleveland", "Mizuno", "Odyssey", "Scotty Cameron", "Vokey", "Bridgestone", "Wilson",
+    "PXG", "Vice", "Kirkland Signature", "Maxfli", "Snell", "OnCore", "Volvik", "Honma", "Tour Edge", "XXIO", "Bettinardi", "L.A.B. Golf", "Evnroll",
+    "FootJoy", "adidas", "Nike", "Puma", "ECCO", "Under Armour", "Skechers", "New Balance", "G/FORE", "Payntr", "True Linkswear", "Zero Friction",
+    "Sun Mountain", "Vessel", "Jones", "OGIO", "Bushnell", "Garmin", "Arccos", "Shot Scope", "Precision Pro"]
+}

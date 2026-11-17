@@ -7,11 +7,15 @@ const crypto = require('crypto');
 const db = require('./db');
 const { parseConfirmation, laTime, laParts, fmtWhen } = require('./parse');
 const { vapidKeys, sendPush } = require('./push');
+const svc = require('./services');
+const { brief, wakeOn } = require('./brief');
+const { wakeTick, e164, twilioReady } = require('./wake');
+const track = require('./track');
 
 const PORT = Number(process.env.PORT || 8790);
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml',
-  '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.ico': 'image/x-icon' };
+  '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
 const HOUR = 3600000;
 // How long before the free-cancellation deadline the "still in?" reminder goes out.
 const REMIND_HOURS = Number(process.env.REMIND_HOURS || 12);
@@ -235,7 +239,9 @@ function readExpense(body) {
 // ---- scorecards -------------------------------------------------------------
 function coursePars(courseId, holes, startHole) {
   const c = courseId && db.courseById(courseId);
-  const all = c && Array.isArray(c.pars) && c.pars.length === 18 ? c.pars : null;
+  const fromInfo = c?.info?.holes?.map((h) => h.par);
+  if (fromInfo?.length === 9 && holes === 9) return fromInfo;
+  const all = c && Array.isArray(c.pars) && c.pars.length === 18 ? c.pars : fromInfo?.length === 18 ? fromInfo : null;
   const from = startHole === 10 ? 9 : 0;
   return Array.from({ length: holes }, (_, i) => (all ? all[from + i] : 4));
 }
@@ -245,11 +251,16 @@ function okStrokes(a, holes) { return Array.isArray(a) && a.length <= holes && a
 function state(me) {
   const balances = db.balances();
   return {
-    me: db.pubUser(me), users: db.users(), courses: db.courses(),
+    me: db.ownProfile(me), users: db.users(), courses: db.courses(),
     bookings: db.bookings(Date.now() - 180 * 24 * HOUR), expenses: db.expenses(), settlements: db.settlements(),
     balances, transfers: transfers(balances), rounds: db.rounds(), categories: CATEGORIES,
     push: { key: VAPID.publicKey, mine: db.subCount(me.id) }, remindHours: REMIND_HOURS,
     invite: me.is_admin ? INVITE : undefined,
+    // The browser key is meant to be public (it only works on this site); the server key never leaves the server.
+    mapsKey: svc.key('google_browser_key') || null,
+    features: { google: !!svc.key('google_server_key'), calls: twilioReady() },
+    wakeOn: Object.fromEntries(db.bookings(Date.now() - 6 * HOUR).map((b) => [b.id, wakeOn(b)])),
+    ...track.stateFor(me),
   };
 }
 
@@ -257,16 +268,43 @@ async function api(req, res, url, me) {
   const p = url.pathname, m = req.method;
   const seg = p.split('/').filter(Boolean); // ['api', thing, id, action]
   const id = Number(seg[2]);
-  const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req);
+  const big = /^\/api\/shots\/\d+\/photo$/.test(p);
+  const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, big ? 6e6 : 200000);
   const bad = (msg, code = 400) => send(res, code, { error: msg });
 
   if (p === '/api/state' && m === 'GET') return send(res, 200, state(me));
+
+  // Shot tracking, photos, hole layouts and the gear closet (server/track.js).
+  if (['shots', 'photos', 'gear'].includes(seg[1]) || (seg[1] === 'rounds' && ['shots', 'gear'].includes(seg[3])) || (seg[1] === 'courses' && seg[3] === 'holes')) {
+    const done = await track.handle(req, res, url, me, body, { send, bad });
+    if (done !== false) return;
+  }
 
   if (p === '/api/me' && m === 'POST') {
     const name = str(body.name, 30) || me.username;
     const venmo = str(body.venmo, 40).replace(/^@/, '');
     if (venmo && !/^[A-Za-z0-9_-]{2,40}$/.test(venmo)) return bad('Venmo usernames are letters, numbers, - and _');
     db.setProfile(me.id, name, venmo);
+    if ('home' in body || 'phone' in body) {
+      // Home address (for "leave by" times) and phone (for wake-up calls): private to this person.
+      const home = str(body.home, 200);
+      const phone = str(body.phone, 30);
+      if (phone && !e164(phone)) return bad('Phone: a US number like (310) 555-0123');
+      const arriveMins = Math.round(Number(body.arriveMins ?? 30));
+      if (!(arriveMins >= 0 && arriveMins <= 120)) return bad('Arrive between 0 and 120 minutes early');
+      let homeLat = me.home_lat, homeLon = me.home_lon;
+      if (home !== (me.home || '')) {
+        homeLat = homeLon = null;
+        if (home) {
+          const g = await svc.geocode(home).catch(() => null);
+          if (!g) return bad("Couldn't find that address. Try the full street, city and ZIP.");
+          homeLat = g.lat; homeLon = g.lon;
+        }
+      }
+      const wakeOk = !!body.wakeOk;
+      if (wakeOk && (!phone || homeLat == null)) return bad('Wake-up calls need your phone number and home address');
+      db.setTravel(me.id, { phone, home, homeLat, homeLon, arriveMins, wakeOk, tee: str(body.tee, 30) });
+    }
     if (body.newPassword) {
       if (!db.checkPassword(String(body.password || ''), me.pass)) return bad('Current password is wrong');
       if (String(body.newPassword).length < 6) return bad('New password needs at least 6 characters');
@@ -294,6 +332,12 @@ async function api(req, res, url, me) {
     const b = db.bookingById(id);
     if (!b) return bad('That tee time no longer exists', 404);
     if (m === 'PUT' && seg.length === 3) { const r = updateBooking(id, body, me); return r.err ? bad(r.err, r.code) : send(res, 200, r); }
+    if (m === 'GET' && seg[3] === 'brief') return send(res, 200, await brief(b, me));
+    if (m === 'POST' && seg[3] === 'wake') {
+      db.setWake(id, body.wake == null ? null : !!body.wake);
+      db.setWakeLog(id, {}); // plan again from scratch
+      return send(res, 200, { wake: wakeOn(db.bookingById(id)) });
+    }
     if (m === 'POST' && seg[3] === 'rsvp') {
       const rsvp = body.rsvp === 'out' ? 'out' : 'in';
       const prev = b.roster.find((r) => r.userId === me.id)?.rsvp;
@@ -375,8 +419,13 @@ async function api(req, res, url, me) {
       if (body.pars.length !== 18 || !body.pars.every((x) => [3, 4, 5, 6].includes(Number(x)))) return bad('Pars must be 18 holes of 3, 4, 5 or 6');
       pars = body.pars.map(Number);
     }
-    const c = { name, address: str(body.address, 200), phone: str(body.phone, 30), cancelHours, bookUrl: str(body.bookUrl, 300), pars, notes: str(body.notes, 1000) };
+    const c = { name, address: str(body.address, 200), phone: str(body.phone, 30), cancelHours, bookUrl: str(body.bookUrl, 300), pars, notes: str(body.notes, 1000), website: str(body.website, 300) };
     if (body.bookUrl && !/^https?:\/\//i.test(c.bookUrl)) return bad('Booking link should start with https://');
+    if (body.website && !/^https?:\/\//i.test(c.website)) return bad('Website should start with https://');
+    // Keep the course's map position, unless the address changed (then look it up again).
+    const prev = id ? db.courseById(id) : null;
+    if (prev && prev.address === c.address) { c.lat = prev.lat; c.lon = prev.lon; }
+    else if (c.address) { const g = await svc.geocode(c.address).catch(() => null); if (g) { c.lat = g.lat; c.lon = g.lon; } }
     try {
       if (m === 'POST' && seg.length === 2) return send(res, 200, { course: db.saveCourse(c) });
       if (m === 'PUT' && db.courseById(id)) return send(res, 200, { course: db.saveCourse({ ...c, id }) });
@@ -439,7 +488,28 @@ async function api(req, res, url, me) {
     }
   }
 
+  if (p === '/api/practice' && m === 'GET') {
+    // Driving ranges and simulators within 30 miles of where you are (or home).
+    let near = { lat: Number(url.searchParams.get('lat')), lon: Number(url.searchParams.get('lon')) };
+    if (!Number.isFinite(near.lat) || !Number.isFinite(near.lon) || !near.lat) near = me.home_lat != null ? { lat: me.home_lat, lon: me.home_lon } : null;
+    if (!near) return bad('Share your location or add your home address in Me');
+    if (!svc.key('google_server_key')) return bad('Add the Google key in Me › Admin first');
+    try { return send(res, 200, { near, places: await svc.practiceNear(near, 30) }); } catch (e) { return bad(e.message, 502); }
+  }
+
   if (seg[1] === 'admin' && me.is_admin) {
+    if (seg[2] === 'keys') {
+      // Keys are write-only: the page shows whether each is set and its last 4 characters, never the key.
+      if (m === 'POST') {
+        for (const k of svc.KEY_NAMES) if (typeof body[k] === 'string') db.setSetting(k, body[k].trim().slice(0, 300));
+      }
+      const view = Object.fromEntries(svc.KEY_NAMES.map((k) => { const v = svc.key(k); return [k, v ? `…${v.slice(-4)}` : '']; }));
+      return send(res, 200, { keys: view });
+    }
+    if (seg[2] === 'test-google' && m === 'POST') {
+      try { const r = await svc.placesText('Rancho Park Golf Course Los Angeles', null, 1, 'places.displayName'); return send(res, 200, { ok: true, found: r[0]?.displayName?.text || null }); }
+      catch (e) { return bad(e.message, 502); }
+    }
     if (seg[2] === 'password' && m === 'POST') {
       const u = db.userById(Number(body.userId));
       if (!u || String(body.password || '').length < 6) return bad('Pick a person and a password of 6+ characters');
@@ -495,7 +565,7 @@ async function handle(req, res) {
   let file = path.normalize(path.join(PUBLIC, decodeURIComponent(p)));
   if (!file.startsWith(PUBLIC) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(PUBLIC, 'index.html');
   const ext = path.extname(file);
-  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': ext === '.png' ? 'public, max-age=86400' : 'no-cache' };
+  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': ext === '.woff2' ? 'public, max-age=31536000, immutable' : ext === '.png' ? 'public, max-age=86400' : 'no-cache' };
   if (file.endsWith('sw.js')) headers['Service-Worker-Allowed'] = '/';
   res.writeHead(200, headers);
   fs.createReadStream(file).pipe(res);
@@ -505,7 +575,9 @@ const server = http.createServer((req, res) => handle(req, res).catch((e) => { c
 if (require.main === module) {
   server.listen(PORT, () => console.log(`GolfBuddy on http://localhost:${PORT}`));
   setInterval(() => reminderTick().catch((e) => console.error('reminders:', e)), 60000);
+  setInterval(() => wakeTick(Date.now(), { notify }).catch((e) => console.error('wake-up calls:', e)), 60000);
+  setInterval(() => db.cachePrune(), 6 * HOUR);
   setTimeout(() => reminderTick().catch(() => {}), 5000);
 }
 
-module.exports = { server, reminderTick, transfers, evenSplit, eveAt };
+module.exports = { server, reminderTick, transfers, evenSplit, eveAt, notify };

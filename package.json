@@ -6,6 +6,6 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "test": "node test/parse.js && node test/push.js && node --disable-warning=ExperimentalWarning test/e2e.js"
+    "test": "node test/parse.js && node test/push.js && node --disable-warning=ExperimentalWarning test/e2e.js && node --disable-warning=ExperimentalWarning test/v2.js"
   }
 }

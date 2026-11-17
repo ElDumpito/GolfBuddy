@@ -33,3 +33,30 @@ On each phone: open the site in Chrome › ⋮ › **Add to Home screen / Instal
 ```
 npm test   # confirmation reader on real (anonymised) emails, Web Push encryption + VAPID, and a full server run
 ```
+
+## Version 2: Round Brief, wake-up calls, shot tracking, your bag
+
+**Round Brief** on every tee time: National Weather Service forecast for the hours you'll be playing, sunrise/sunset/last light
+(worked out locally) with a warning when a round runs past dark, when to leave home in expected traffic, the scorecard for the
+course (par, yardage and rating by tee, hole handicaps) and notes about the course. Scorecards for the six seeded courses come from
+OpenGolfAPI (© OpenStreetMap contributors, ODbL) and were spot-checked against the courses' own cards; `tools/build-course-data.py`
+rebuilds `server/course-data.json`.
+
+**Keys** are pasted in Me › Admin (admin only), stored in the NAS database and never sent back to the app except the browser key
+(which only works on golf.juno.nexus). Nothing in docker-compose.
+- Google server key: Routes API + Places API (New). Leave-by times, ranges & simulators within 30 miles, address lookups.
+- Google browser key: Maps JavaScript API. The satellite map in shot tracking. Without it a simple drawing is shown.
+- Twilio Account SID, Auth Token and phone number: wake-up phone calls. Without them the wake-up is a push notification.
+
+**Wake-up calls**: each person turns them on in Me (needs their own mobile number and home address). On by default for tee times
+before 8 a.m., switchable per tee time. The call comes 30 minutes before leave-by (re-checked with traffic about 3 hours ahead),
+says when to leave, rings again 5 minutes later if unanswered, and tells the others if both go unanswered. No webhook: the
+server asks Twilio how the call went, so nothing has to get through Cloudflare Access.
+
+**Shot tracking** (Scorecard › Shots): stand by your ball, pick the club, tap Mark. Live yards to the green and since the last
+shot, an auto hole switch, photos stamped with time, GPS and distances, and per-club averages and left/right misses under
+Rounds › Your game. Hole layouts come from OpenStreetMap where the course is mapped, otherwise they're learned from your first
+tee shot and "In the hole" tap on each hole.
+
+**Your bag**: clubs, balls, gloves, shoes; barcode scan (Chrome's built-in reader) or name search (UPCitemdb, free tier), and
+the brand's support phone and site for warranty questions.

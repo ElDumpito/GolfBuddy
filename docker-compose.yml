@@ -1,0 +1,33 @@
+# GolfBuddy (repo and container name: golfbuddy).
+# Paste this whole file into Container Station > Applications > Create, named "golfbuddy".
+# Nothing needs copying onto the NAS: the image is pulled from GitHub's registry.
+services:
+  golfbuddy:
+    image: ghcr.io/eldumpito/golfbuddy:latest
+    pull_policy: always
+    container_name: golfbuddy
+    environment:
+      - PORT=8790
+      # Needed to create an account. Left as "change-me", the server makes one up and prints it in the container log
+      # (it also shows under Me > Admin for the first account).
+      - INVITE_CODE=change-me
+      - PUBLIC_URL=https://golf.juno.nexus
+      # How many hours before free cancellation ends the "still in?" notification goes out.
+      - REMIND_HOURS=12
+      - TZ=America/Los_Angeles
+    volumes:
+      # Accounts, tee times, the ledger and scorecards. The folder is created automatically.
+      - /share/Container/golfbuddy-data:/app/data
+    ports:
+      - "8790:8790"
+    mem_limit: 128m
+    restart: unless-stopped
+    # Joins the tunnel application's network so Cloudflare can reach it by name (http://golfbuddy:8790).
+    # Create the golfbuddy-tunnel application first, or delete these lines to run LAN-only.
+    networks:
+      - tunnel
+
+networks:
+  tunnel:
+    name: golfbuddy-tunnel_default
+    external: true

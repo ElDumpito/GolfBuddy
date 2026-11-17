@@ -1,0 +1,11 @@
+{
+  "name": "golfbuddy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GolfBuddy: shared tee times, who-owes-who and scorecards for two golf buddies",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "test": "node test/parse.js && node test/push.js && node --disable-warning=ExperimentalWarning test/e2e.js"
+  }
+}

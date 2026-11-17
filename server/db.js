@@ -1,0 +1,222 @@
+'use strict';
+// SQLite storage (Node's built-in driver, so there is nothing to install or compile).
+// Money is stored in cents. Times are stored as milliseconds since 1970 (UTC); the app shows
+// them in Los Angeles time.
+const { DatabaseSync } = require('node:sqlite');
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+
+const DATA = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+fs.mkdirSync(DATA, { recursive: true });
+const db = new DatabaseSync(process.env.DB_FILE || path.join(DATA, 'golfbuddy.db'));
+db.exec(`
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 3000;
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE COLLATE NOCASE, pass TEXT, name TEXT, venmo TEXT,
+  is_admin INTEGER DEFAULT 0, created INTEGER);
+CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER, created INTEGER);
+CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS courses (id INTEGER PRIMARY KEY, name TEXT UNIQUE COLLATE NOCASE, address TEXT, phone TEXT,
+  cancel_hours INTEGER DEFAULT 24, book_url TEXT, pars TEXT, notes TEXT);
+CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, course_id INTEGER, course TEXT, address TEXT, tee_at INTEGER,
+  players INTEGER DEFAULT 2, holes INTEGER DEFAULT 18, booker_id INTEGER, confirmation TEXT,
+  total INTEGER DEFAULT 0, deposit INTEGER DEFAULT 0, cancel_at INTEGER, notes TEXT, source TEXT,
+  status TEXT DEFAULT 'active', created_by INTEGER, created INTEGER, updated INTEGER,
+  cancel_reminded INTEGER DEFAULT 0, eve_reminded INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS booking_players (booking_id INTEGER, user_id INTEGER, rsvp TEXT DEFAULT 'in', PRIMARY KEY(booking_id, user_id));
+-- One row per thing somebody paid for. split is {"userId": cents, ...} and adds up to amount.
+-- auto marks the deposit row a booking keeps up to date by itself.
+CREATE TABLE IF NOT EXISTS expenses (id INTEGER PRIMARY KEY, ts INTEGER, booking_id INTEGER, paid_by INTEGER, amount INTEGER,
+  category TEXT, description TEXT, split TEXT, auto TEXT, created_by INTEGER, deleted INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS settlements (id INTEGER PRIMARY KEY, ts INTEGER, from_id INTEGER, to_id INTEGER, amount INTEGER,
+  method TEXT, note TEXT, created_by INTEGER, deleted INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER, p256dh TEXT, auth TEXT, created INTEGER);
+CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, booking_id INTEGER, course_id INTEGER, course TEXT, played_on INTEGER,
+  holes INTEGER DEFAULT 18, start_hole INTEGER DEFAULT 1, pars TEXT, created_by INTEGER, created INTEGER, deleted INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS scores (round_id INTEGER, user_id INTEGER, strokes TEXT, PRIMARY KEY(round_id, user_id));
+CREATE INDEX IF NOT EXISTS bookings_tee ON bookings(tee_at);
+CREATE INDEX IF NOT EXISTS expenses_booking ON expenses(booking_id);
+`);
+
+const q = (sql) => db.prepare(sql);
+const json = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
+
+// Courses the two of you have actually played, so the first bookings already know their address
+// and cancellation window. Everything here can be edited in the app.
+const SEED_COURSES = [
+  ['Rancho Park', '10460 W Pico Blvd, Los Angeles, CA 90064', '(310) 838-7373', 24, 'https://golf.lacity.gov/'],
+  ['Griffith Park - Harding', '4730 Crystal Springs Dr, Los Angeles, CA 90027', '(323) 663-2555', 24, 'https://golf.lacity.gov/'],
+  ['Griffith Park - Wilson', '4730 Crystal Springs Dr, Los Angeles, CA 90027', '(323) 663-2555', 24, 'https://golf.lacity.gov/'],
+  ['Roosevelt', 'Roosevelt Golf Course, Los Angeles, CA', '', 24, 'https://golf.lacity.gov/'],
+  ['Los Verdes Golf Course', '7000 W Los Verdes Dr, Rancho Palos Verdes, CA 90275', '(310) 377-7888', 48, ''],
+  ['Soule Park Golf Course', '1033 E Ojai Ave, Ojai, CA 93023', '(805) 646-5633', 24, ''],
+];
+if (!q("SELECT v FROM settings WHERE k='seeded'").get()) {
+  const ins = q('INSERT OR IGNORE INTO courses(name, address, phone, cancel_hours, book_url) VALUES(?,?,?,?,?)');
+  for (const c of SEED_COURSES) ins.run(...c);
+  q("INSERT INTO settings(k,v) VALUES('seeded','1')").run();
+}
+
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  return salt.toString('hex') + ':' + crypto.scryptSync(pw, salt, 32).toString('hex');
+}
+function checkPassword(pw, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hash] = stored.split(':');
+  const a = Buffer.from(hash, 'hex');
+  const b = crypto.scryptSync(pw, Buffer.from(salt, 'hex'), 32);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin };
+const bookingRow = (b) => b && ({
+  id: b.id, courseId: b.course_id, course: b.course, address: b.address || '', teeAt: b.tee_at, players: b.players, holes: b.holes,
+  bookerId: b.booker_id, confirmation: b.confirmation || '', total: b.total, deposit: b.deposit, cancelAt: b.cancel_at,
+  notes: b.notes || '', source: b.source || '', status: b.status, createdBy: b.created_by, created: b.created, updated: b.updated,
+});
+const expenseRow = (e) => ({ id: e.id, ts: e.ts, bookingId: e.booking_id, paidBy: e.paid_by, amount: e.amount, category: e.category,
+  description: e.description || '', split: json(e.split, {}), auto: e.auto || null, createdBy: e.created_by });
+const courseRow = (c) => c && ({ id: c.id, name: c.name, address: c.address || '', phone: c.phone || '', cancelHours: c.cancel_hours,
+  bookUrl: c.book_url || '', pars: json(c.pars, null), notes: c.notes || '' });
+
+const api = {
+  raw: db, dataDir: DATA, hashPassword, checkPassword, pubUser,
+  getSetting: (k) => q('SELECT v FROM settings WHERE k=?').get(k)?.v,
+  setSetting: (k, v) => q('INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v)),
+
+  // ---- people ----
+  userCount: () => q('SELECT COUNT(*) c FROM users').get().c,
+  userByName: (n) => q('SELECT * FROM users WHERE username=?').get(n),
+  userById: (id) => q('SELECT * FROM users WHERE id=?').get(id),
+  users: () => q('SELECT * FROM users ORDER BY id').all().map(pubUser),
+  createUser(username, pw, name, admin) {
+    const r = q('INSERT INTO users(username, pass, name, is_admin, created) VALUES(?,?,?,?,?)').run(username, hashPassword(pw), name || username, admin ? 1 : 0, Date.now());
+    return api.userById(Number(r.lastInsertRowid));
+  },
+  setProfile: (id, name, venmo) => q('UPDATE users SET name=?, venmo=? WHERE id=?').run(name, venmo || null, id),
+  setPassword: (id, pw) => q('UPDATE users SET pass=? WHERE id=?').run(hashPassword(pw), id),
+  createSession(userId) {
+    const token = crypto.randomBytes(32).toString('hex');
+    q('INSERT INTO sessions(token, user_id, created) VALUES(?,?,?)').run(token, userId, Date.now());
+    return token;
+  },
+  sessionUser: (t) => (t ? q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?').get(t) || null : null),
+  dropSession: (t) => q('DELETE FROM sessions WHERE token=?').run(t),
+  dropUserSessions: (id) => q('DELETE FROM sessions WHERE user_id=?').run(id),
+
+  // ---- courses ----
+  courses: () => q('SELECT * FROM courses ORDER BY name').all().map(courseRow),
+  courseById: (id) => courseRow(q('SELECT * FROM courses WHERE id=?').get(id)),
+  courseByName: (n) => courseRow(q('SELECT * FROM courses WHERE name=?').get(String(n || '').trim())),
+  saveCourse(c) {
+    if (c.id) {
+      q('UPDATE courses SET name=?, address=?, phone=?, cancel_hours=?, book_url=?, pars=?, notes=? WHERE id=?')
+        .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '', c.id);
+      return api.courseById(c.id);
+    }
+    const r = q('INSERT INTO courses(name, address, phone, cancel_hours, book_url, pars, notes) VALUES(?,?,?,?,?,?,?)')
+      .run(c.name, c.address || '', c.phone || '', c.cancelHours, c.bookUrl || '', c.pars ? JSON.stringify(c.pars) : null, c.notes || '');
+    return api.courseById(Number(r.lastInsertRowid));
+  },
+
+  // ---- bookings ----
+  bookingById: (id) => {
+    const b = bookingRow(q('SELECT * FROM bookings WHERE id=?').get(id));
+    if (b) b.roster = api.roster(b.id);
+    return b;
+  },
+  roster: (bookingId) => q('SELECT user_id userId, rsvp FROM booking_players WHERE booking_id=? ORDER BY user_id').all(bookingId),
+  bookings(since) {
+    const rows = q('SELECT * FROM bookings WHERE tee_at>=? ORDER BY tee_at').all(since).map(bookingRow);
+    const all = q('SELECT booking_id b, user_id userId, rsvp FROM booking_players').all();
+    for (const b of rows) b.roster = all.filter((r) => r.b === b.id).map(({ userId, rsvp }) => ({ userId, rsvp }));
+    return rows;
+  },
+  insertBooking(b) {
+    const now = Date.now();
+    const r = q(`INSERT INTO bookings(course_id, course, address, tee_at, players, holes, booker_id, confirmation, total, deposit, cancel_at, notes, source,
+      created_by, created, updated, cancel_reminded) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(b.courseId, b.course, b.address, b.teeAt, b.players, b.holes, b.bookerId, b.confirmation, b.total, b.deposit, b.cancelAt, b.notes, b.source,
+        b.createdBy, now, now, b.cancelReminded ? 1 : 0);
+    return Number(r.lastInsertRowid);
+  },
+  updateBooking(id, b) {
+    q(`UPDATE bookings SET course_id=?, course=?, address=?, tee_at=?, players=?, holes=?, booker_id=?, confirmation=?, total=?, deposit=?, cancel_at=?,
+       notes=?, updated=?, cancel_reminded=?, eve_reminded=? WHERE id=?`)
+      .run(b.courseId, b.course, b.address, b.teeAt, b.players, b.holes, b.bookerId, b.confirmation, b.total, b.deposit, b.cancelAt, b.notes, Date.now(),
+        b.cancelReminded ? 1 : 0, b.eveReminded ? 1 : 0, id);
+  },
+  setBookingStatus: (id, status) => q('UPDATE bookings SET status=?, updated=? WHERE id=?').run(status, Date.now(), id),
+  setRoster(bookingId, userIds) {
+    const keep = new Map(api.roster(bookingId).map((r) => [r.userId, r.rsvp]));
+    q('DELETE FROM booking_players WHERE booking_id=?').run(bookingId);
+    const ins = q('INSERT INTO booking_players(booking_id, user_id, rsvp) VALUES(?,?,?)');
+    for (const id of userIds) ins.run(bookingId, id, keep.get(id) || 'in');
+  },
+  setRsvp: (bookingId, userId, rsvp) => q(`INSERT INTO booking_players(booking_id, user_id, rsvp) VALUES(?,?,?)
+    ON CONFLICT(booking_id, user_id) DO UPDATE SET rsvp=excluded.rsvp`).run(bookingId, userId, rsvp),
+  remindersDue: () => q("SELECT * FROM bookings WHERE status='active' AND (cancel_reminded=0 OR eve_reminded=0) AND tee_at>?").all(Date.now()).map((b) => ({ ...bookingRow(b), cancelReminded: !!b.cancel_reminded, eveReminded: !!b.eve_reminded })),
+  markReminded: (id, which) => q(`UPDATE bookings SET ${which === 'eve' ? 'eve_reminded' : 'cancel_reminded'}=1 WHERE id=?`).run(id),
+
+  // ---- money ----
+  expenses: (limit = 300) => q('SELECT * FROM expenses WHERE deleted=0 ORDER BY ts DESC, id DESC LIMIT ?').all(limit).map(expenseRow),
+  expenseById: (id) => { const e = q('SELECT * FROM expenses WHERE id=? AND deleted=0').get(id); return e ? expenseRow(e) : null; },
+  autoExpense: (bookingId, kind) => { const e = q('SELECT * FROM expenses WHERE booking_id=? AND auto=? AND deleted=0').get(bookingId, kind); return e ? expenseRow(e) : null; },
+  addExpense(e) {
+    const r = q('INSERT INTO expenses(ts, booking_id, paid_by, amount, category, description, split, auto, created_by) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(e.ts || Date.now(), e.bookingId || null, e.paidBy, e.amount, e.category, e.description || '', JSON.stringify(e.split), e.auto || null, e.createdBy);
+    return Number(r.lastInsertRowid);
+  },
+  updateExpense: (id, e) => q('UPDATE expenses SET paid_by=?, amount=?, category=?, description=?, split=? WHERE id=?')
+    .run(e.paidBy, e.amount, e.category, e.description || '', JSON.stringify(e.split), id),
+  deleteExpense: (id) => q('UPDATE expenses SET deleted=1 WHERE id=?').run(id),
+  settlements: (limit = 200) => q(`SELECT id, ts, from_id fromId, to_id toId, amount, method, note, created_by createdBy FROM settlements
+    WHERE deleted=0 ORDER BY ts DESC, id DESC LIMIT ?`).all(limit),
+  settlementById: (id) => q('SELECT id, from_id fromId, to_id toId, amount, created_by createdBy FROM settlements WHERE id=? AND deleted=0').get(id),
+  addSettlement: (s) => Number(q('INSERT INTO settlements(ts, from_id, to_id, amount, method, note, created_by) VALUES(?,?,?,?,?,?,?)')
+    .run(Date.now(), s.fromId, s.toId, s.amount, s.method || '', s.note || '', s.createdBy).lastInsertRowid),
+  deleteSettlement: (id) => q('UPDATE settlements SET deleted=1 WHERE id=?').run(id),
+  // Net per person: what they paid for others minus what others paid for them, adjusted by
+  // money that has already changed hands. Positive means the group owes them.
+  balances() {
+    const net = new Map(api.users().map((u) => [u.id, 0]));
+    const add = (id, x) => net.set(id, (net.get(id) || 0) + x);
+    for (const e of q('SELECT paid_by, amount, split FROM expenses WHERE deleted=0').all()) {
+      add(e.paid_by, e.amount);
+      for (const [uid, share] of Object.entries(json(e.split, {}))) add(Number(uid), -share);
+    }
+    for (const s of q('SELECT from_id, to_id, amount FROM settlements WHERE deleted=0').all()) { add(s.from_id, s.amount); add(s.to_id, -s.amount); }
+    return [...net].map(([userId, balance]) => ({ userId, balance }));
+  },
+
+  // ---- push ----
+  addSub: (userId, s) => q(`INSERT INTO push_subs(endpoint, user_id, p256dh, auth, created) VALUES(?,?,?,?,?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth`).run(s.endpoint, userId, s.p256dh, s.auth, Date.now()),
+  dropSub: (endpoint) => q('DELETE FROM push_subs WHERE endpoint=?').run(endpoint),
+  subsFor: (userIds) => {
+    const all = q('SELECT endpoint, user_id userId, p256dh, auth FROM push_subs').all();
+    return userIds ? all.filter((s) => userIds.includes(s.userId)) : all;
+  },
+  subCount: (userId) => q('SELECT COUNT(*) c FROM push_subs WHERE user_id=?').get(userId).c,
+
+  // ---- scorecards ----
+  rounds(limit = 60) {
+    const rs = q('SELECT * FROM rounds WHERE deleted=0 ORDER BY played_on DESC, id DESC LIMIT ?').all(limit);
+    const sc = q('SELECT round_id r, user_id userId, strokes FROM scores').all();
+    return rs.map((r) => ({ id: r.id, bookingId: r.booking_id, courseId: r.course_id, course: r.course, playedOn: r.played_on, holes: r.holes,
+      startHole: r.start_hole, pars: json(r.pars, []), createdBy: r.created_by,
+      scores: sc.filter((s) => s.r === r.id).map((s) => ({ userId: s.userId, strokes: json(s.strokes, []) })) }));
+  },
+  roundById: (id) => api.rounds(100000).find((r) => r.id === id) || null,
+  addRound: (r) => Number(q('INSERT INTO rounds(booking_id, course_id, course, played_on, holes, start_hole, pars, created_by, created) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(r.bookingId || null, r.courseId || null, r.course, r.playedOn, r.holes, r.startHole, JSON.stringify(r.pars), r.createdBy, Date.now()).lastInsertRowid),
+  setRoundPars: (id, pars) => q('UPDATE rounds SET pars=? WHERE id=?').run(JSON.stringify(pars), id),
+  setScores: (roundId, userId, strokes) => q(`INSERT INTO scores(round_id, user_id, strokes) VALUES(?,?,?)
+    ON CONFLICT(round_id, user_id) DO UPDATE SET strokes=excluded.strokes`).run(roundId, userId, JSON.stringify(strokes)),
+  deleteRound: (id) => q('UPDATE rounds SET deleted=1 WHERE id=?').run(id),
+};
+
+module.exports = api;

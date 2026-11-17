@@ -1,0 +1,29 @@
+---------- Forwarded message ---------
+From: Soule Park Golf Course <no-reply@foreupsoftware.com>
+Date: Mon, Aug 31, 2026, 9:58 PM
+Subject: Reservation Purchase Receipt
+To: <buddy@example.com>
+
+Thank you for your purchase.
+
+Reservation Details
+Facility
+Soule Park Golf Course Details
+Date: 9/4/26
+Time: 11:30am
+Holes: 18
+Players: 2
+Carts: 0
+Payment Details
+Billing Info
+Mike Buddy
+buddy@example.com
+Paid with: M/C 0000
+Paid on: 9:58pm 8/31/26 PDT
+Confirmation #: TTID_000000000000xyz
+Details
+Price: $94.00
+Discount: $0.00
+*Total: $94.00*
+
+If you have any questions or concerns, you may contact at

@@ -1,0 +1,7 @@
+data
+.git
+.github
+test
+*.md
+docker-compose.yml
+tunnel-compose.yml

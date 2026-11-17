@@ -9,14 +9,13 @@ Shared tee times, who-owes-who and scorecards for a couple of golf buddies. One 
 
 ## Install on the NAS (Container Station only, same pattern as StashHouse Poker)
 
-Every push to `main` runs the tests and publishes `ghcr.io/eldumpito/golfbuddy`.
+The app joins the `boker-tunnel_default` network, so `boker-tunnel` must be running. Every push to `main` runs the tests and publishes `ghcr.io/eldumpito/golfbuddy`.
 
 1. **Let the NAS pull the image.** GitHub › your profile › Packages › `golfbuddy` › Package settings › Change visibility › Public (the code stays private; the image holds no secrets). Or add a `read:packages` token under Container Station › Registries.
-2. **Cloudflare tunnel.** Zero Trust › Networks › Tunnels › Create a tunnel › Cloudflared › name it `golfbuddy`. Copy the token (the long string after `--token`). Public hostname: `golf.juno.nexus` → HTTP → `golfbuddy:8790`.
+2. **Cloudflare tunnel.** GolfBuddy rides on the poker app's tunnel (`boker`, whose connector runs as the `boker-tunnel` application), so there is no new token or connector. Zero Trust › Networks › Tunnels › `boker` › Public hostnames › Add: `golf.juno.nexus` → HTTP → `golfbuddy:8790`.
 3. **Login wall.** Zero Trust › Access › Applications › Add › Self-hosted, name "GolfBuddy", domain `golf.juno.nexus`, a policy allowing your email and your buddy's. Set the session duration to 1 month so the installed app and notification taps do not keep bouncing to the login page.
-4. **Tunnel connector.** Container Station › Applications › Create, name `golfbuddy-tunnel`, paste `tunnel-compose.yml` with the token filled in.
-5. **The app.** Container Station › Applications › Create, name `golfbuddy`, paste `docker-compose.yml`. Optionally set `INVITE_CODE`; left as `change-me`, one is generated (container log, and Me › Admin).
-6. Open `https://golf.juno.nexus`, **Create account** first (that account is the admin), then send your buddy the invite code.
+4. **The app.** Container Station › Applications › Create, name `golfbuddy`, paste `docker-compose.yml`. Optionally set `INVITE_CODE`; left as `change-me`, one is generated (container log, and Me › Admin).
+5. Open `https://golf.juno.nexus`, **Create account** first (that account is the admin), then send your buddy the invite code.
 
 On each phone: open the site in Chrome › ⋮ › **Add to Home screen / Install app**, then **Turn on** notifications. Installing also puts GolfBuddy in Android's Share menu: in Gmail, long-press the email text › Select all › Share › GolfBuddy.
 

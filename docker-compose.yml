@@ -22,12 +22,12 @@ services:
       - "8790:8790"
     mem_limit: 128m
     restart: unless-stopped
-    # Joins the tunnel application's network so Cloudflare can reach it by name (http://golfbuddy:8790).
-    # Create the golfbuddy-tunnel application first, or delete these lines to run LAN-only.
+    # Shares StashHouse Poker's Cloudflare tunnel: the connector in the boker-tunnel application reaches this
+    # container by name (http://golfbuddy:8790) on that application's network. Delete these lines to run LAN-only.
     networks:
       - tunnel
 
 networks:
   tunnel:
-    name: golfbuddy-tunnel_default
+    name: boker-tunnel_default
     external: true

@@ -112,13 +112,13 @@ const take = (uid) => { const m = inbox[uid] || []; inbox[uid] = []; return m; }
 
   // reminders: nothing yet; "still in?" 12h before free cancellation ends; then the evening before
   take(ck.id); take(mike.id);
-  await reminderTick(Date.now()); assert.strictEqual((inbox[ck.id] || []).length, 0);
-  await reminderTick(tee - 36 * HOUR + 60000);
+  await reminderTick(Date.now(), async () => null); assert.strictEqual((inbox[ck.id] || []).length, 0);
+  await reminderTick(tee - 36 * HOUR + 60000, async () => null);
   m = take(ck.id); assert.strictEqual(m.length, 1); assert.ok(m[0].title.startsWith('⏰ Last call to cancel'), m[0].title); assert.ok(m[0].requireInteraction);
   assert.strictEqual(take(mike.id).length, 1);
-  await reminderTick(tee - 35 * HOUR); assert.strictEqual(take(ck.id).length, 0); // only once
+  await reminderTick(tee - 35 * HOUR, async () => null); assert.strictEqual(take(ck.id).length, 0); // only once
   const eve = require('../server/index').eveAt({ teeAt: tee });
-  await reminderTick(eve + 60000); m = take(ck.id); assert.strictEqual(m.length, 1); assert.ok(m[0].title.startsWith('🏌️ Tomorrow'));
+  await reminderTick(eve + 60000, async () => null); m = take(ck.id); assert.strictEqual(m.length, 1); assert.ok(m[0].title.startsWith('🏌️ Tomorrow'));
 
   // answering from the notification (what the service worker does)
   await call('ck', 'POST', `/api/bookings/${bid}/rsvp`, { rsvp: 'out' });

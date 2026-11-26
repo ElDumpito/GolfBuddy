@@ -60,3 +60,20 @@ tee shot and "In the hole" tap on each hole.
 
 **Your bag**: clubs, balls, gloves, shoes; barcode scan (Chrome's built-in reader) or name search (UPCitemdb, free tier), and
 the brand's support phone and site for warranty questions.
+
+## L.A. City prices, the rest paid at the course, Player Cards, weather alerts
+
+- **Prices** (`server/rates.js`): Rancho, Wilson, Harding and Roosevelt green fees from golf.lacity.gov/rates (checked
+  2026-11-25): weekday, weekend, weekend before 9 a.m., twilight, super twilight, City holidays (golf.lacity.gov/?p=264),
+  plus cart seats and push-cart rental. Twilight follows the City's posted seasonal schedule; a Player Card starts it an
+  hour earlier. A tee time saved with an empty total gets its total from these rates and keeps it up to date (walk / push
+  cart / riding cart). Typing a total switches that off for the tee time. Re-check the rates when the City changes them.
+- **Deposit and the rest**: the booker's deposit counts toward the total. "At the course: … Not yet / CK paid / Mike paid"
+  on a tee time (or "The rest, paid at the course by" when entering one) adds one ledger line for the total minus the
+  deposit, split evenly, and keeps it in step with the total.
+- **Player Card**: Me › L.A. City Player Card. Number and renewal date are only shown to their owner; a push two weeks
+  before renewal.
+- **Weather alerts**: every 30 minutes for tee times in the next 5 days. One alert when the forecast turns bad (40%+ rain
+  or 20+ mph wind), one when it clears (under 25% and 15 mph). The cancellation-deadline and night-before reminders
+  include the forecast.
+- **Call me now**: Me › Getting there, once Twilio is set up and your number is saved.

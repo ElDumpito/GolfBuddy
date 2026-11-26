@@ -319,19 +319,10 @@ function viewBooking(id) {
       ${briefWake(b, br?.wake) ? `<div class="brief-sec">${briefWake(b, br?.wake)}</div>` : ''}
       <div class="brief-sec">${briefCourse(b, c)}</div>
     </section>` : c.info ? `<section class="card"><div class="card-head"><h2>The course</h2></div>${briefCourse(b, c)}</section>` : ''}
-    <section class="card"><div class="card-head"><h2>Booking</h2></div><div class="kv">
-      ${b.cancelAt ? `<span>Free cancel until</span><span>${fWhen(b.cancelAt)}</span>` : ''}
-      ${b.confirmation ? `<span>Confirmation</span><span><button class="chip" data-act="copy" data-v="${esc(b.confirmation)}">${esc(b.confirmation)} ${icon('copy', 'sm')}</button></span>` : ''}
-      <span>Total cost</span><span class="num">${b.total ? money(b.total) : '<span class="faint">not entered</span>'}</span>
-      <span>Deposit</span><span>${b.deposit ? `${money(b.deposit)} by ${esc(first(b.bookerId))}, split ${ids.length} ways` : '<span class="faint">none</span>'}</span>
-      ${b.total ? `<span>Due at course</span><span class="num">${money(due)}</span>` : ''}
-      ${b.address ? `<span>Address</span><span>${esc(b.address)}</span>` : ''}
-      ${b.source ? `<span>Added from</span><span>${esc(b.source)}</span>` : ''}
-    </div>${b.notes ? `<p class="small-text dim" style="white-space:pre-wrap;margin:12px 0 0">${esc(b.notes)}</p>` : ''}</section>
+    ${bookingCard(b, ids, due)}
     <section class="card"><div class="card-head"><h2>Money</h2></div>
       <div class="list">${exps.length ? exps.map(expenseLine).join('') : `<div class="empty">Nothing yet.</div>`}</div>
       <div class="chips" style="margin-top:12px">
-        <a class="btn chip primary" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Green fees')}${due ? `&amt=${dollars(due)}` : ''}">Paid at the course</a>
         <a class="btn chip" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Food & drinks')}">Food &amp; drinks</a>
         <a class="btn chip" href="#/money/add?b=${b.id}&cat=${encodeURIComponent('Pro shop')}">Pro shop</a>
         <a class="btn chip" href="#/money/add?b=${b.id}">Other</a>
@@ -345,17 +336,64 @@ function viewBooking(id) {
   });
 }
 
+// --- the booking: price (with where it comes from), walk or ride, deposit, and who paid the rest ---
+const RIDES = [['walk', 'Walk'], ['push', 'Push cart'], ['cart', 'Riding cart']];
+function bookingCard(b, ids, due) {
+  const q = S.quotes?.[b.id];
+  const priced = q && !q.unavailable;
+  const rideNote = { walk: 'walking', push: 'renting push carts', cart: 'riding (a cart seat each)' }[b.ride] || 'walking';
+  const upcoming = b.status !== 'cancelled';
+  return `<section class="card"><div class="card-head"><h2>Booking</h2></div>
+    <div class="kv">
+      ${b.cancelAt ? `<span>Free cancel until</span><span>${fWhen(b.cancelAt)}</span>` : ''}
+      ${b.confirmation ? `<span>Confirmation</span><span><button class="chip" data-act="copy" data-v="${esc(b.confirmation)}">${esc(b.confirmation)} ${icon('copy', 'sm')}</button></span>` : ''}
+      <span>Total cost</span><span class="num">${b.total ? money(b.total) : '<span class="faint">not entered</span>'}${b.priceAuto ? ' <span class="pill ok">L.A. City rate</span>' : ''}</span>
+      <span>Deposit</span><span>${b.deposit ? `${money(b.deposit)} by ${esc(first(b.bookerId))}${priced ? ', counts toward the total' : ''}` : '<span class="faint">none</span>'}</span>
+      ${b.address ? `<span>Address</span><span>${esc(b.address)}</span>` : ''}
+      ${b.source ? `<span>Added from</span><span>${esc(b.source)}</span>` : ''}
+    </div>
+    ${priced ? `<div class="note" style="margin-top:12px">${esc(q.label)}: <b class="num">${money(q.green)}</b> each${q.rideFee ? ` + ${money(q.rideFee)} ${b.ride === 'cart' ? 'cart seat' : 'push cart'}` : ''}, ${rideNote}${q.players > 1 ? ` × ${q.players}` : ''} = <b class="num">${money(q.total)}</b>.
+      ${b.priceAuto ? '' : q.total !== b.total ? ` <button class="chip" data-act="use-rate" data-id="${b.id}">Use ${money(q.total)}</button>` : ''}
+      <div class="tiny faint" style="margin-top:4px">From the City's published rates, checked ${esc(q.checked)}. Player Card twilight starts at ${q.twilightAt > 12 ? q.twilightAt - 12 : q.twilightAt} p.m. that day.${q.rideNote ? ' ' + esc(q.rideNote) + '.' : ''}</div></div>` : ''}
+    ${upcoming ? `<div class="over" style="margin:16px 0 8px">Getting around</div>
+      <div class="seg">${RIDES.map(([k, l]) => `<button data-act="ride" data-id="${b.id}" data-v="${k}" class="${(b.ride || 'walk') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}
+    ${b.total > b.deposit ? `<div class="over" style="margin:16px 0 8px">At the course: ${money(due)}${b.deposit ? ` after the ${money(b.deposit)} deposit` : ''}</div>
+      <div class="seg"><button data-act="paid" data-id="${b.id}" data-v="" class="${!b.balanceBy ? 'on' : ''}">Not yet</button>${b.roster.map((r) => `<button data-act="paid" data-id="${b.id}" data-v="${r.userId}" class="${b.balanceBy === r.userId ? 'on' : ''}">${esc(first(r.userId))} paid</button>`).join('')}</div>
+      <div class="tiny faint" style="margin-top:6px">${b.balanceBy ? `In Money as green fees paid by ${esc(first(b.balanceBy))}, split ${ids.length} ways. It follows the total if that changes.` : 'Tap who paid at check-in; it goes into Money split evenly.'}</div>` : ''}
+    ${b.notes ? `<p class="small-text dim" style="white-space:pre-wrap;margin:12px 0 0">${esc(b.notes)}</p>` : ''}</section>`;
+}
+
 // ---------- add / edit a tee time ----------
 function blankForm() {
   const tomorrow = laParts(Date.now() + 24 * HOUR).date;
   return { course: '', date: tomorrow, time: '07:00', players: 2, holes: 18, bookerId: S.me.id, roster: S.users.map((u) => u.id), total: '', deposit: '',
-    cancelHours: 24, confirmation: '', address: '', phone: '', notes: '', source: 'Manual', paste: '' };
+    cancelHours: 24, confirmation: '', address: '', phone: '', notes: '', source: 'Manual', paste: '', ride: 'walk', balanceBy: '', autoPrice: true };
 }
 function formFromBooking(b) {
   const p = laParts(b.teeAt);
   return { id: b.id, course: b.course, date: p.date, time: p.time, players: b.players, holes: b.holes, bookerId: b.bookerId, roster: b.roster.map((r) => r.userId),
     total: dollars(b.total), deposit: dollars(b.deposit), cancelHours: Math.round((b.teeAt - b.cancelAt) / HOUR), confirmation: b.confirmation, address: b.address,
-    phone: '', notes: b.notes, source: b.source };
+    phone: '', notes: b.notes, source: b.source, ride: b.ride || 'walk', balanceBy: b.balanceBy || '', autoPrice: b.priceAuto };
+}
+// Ask the server what the City charges for what's in the form (debounced), then show it.
+let quoteT = null;
+function refreshFormQuote() {
+  clearTimeout(quoteT);
+  quoteT = setTimeout(async () => {
+    const f = ui.form; if (!f || !$('#bf')) return;
+    if (!isLaCityName(f.course) || !f.date || !f.time) { f.quote = null; paintQuote(); return; }
+    const qs = new URLSearchParams({ course: f.course, teeAt: laTime(f.date, f.time), holes: f.holes, players: f.players, ride: f.ride, roster: f.roster.join(',') });
+    try { f.quote = (await api('GET', `/api/quote?${qs}`)).quote; } catch { f.quote = null; }
+    paintQuote();
+  }, 250);
+}
+const isLaCityName = (n) => /rancho|wilson|harding|roosevelt/i.test(n || '');
+function paintQuote() {
+  const el = $('#f-quote'); if (!el) return;
+  const q = ui.form.quote;
+  el.innerHTML = q && !q.unavailable ? `${esc(q.label)}: ${money(q.green)} each${q.rideFee ? ` + ${money(q.rideFee)}` : ''} × ${q.players} = <b class="num">${money(q.total)}</b>` : '';
+  const t = $('#f-total');
+  if (t && ui.form.autoPrice && q && !q.unavailable) { t.value = dollars(q.total); }
 }
 function viewForm(id) {
   const editing = !!id;
@@ -381,8 +419,11 @@ function viewForm(id) {
         <div><label>Holes</label><div class="seg"><button data-act="holes" data-v="18" class="${f.holes === 18 ? 'on' : ''}">18</button><button data-act="holes" data-v="9" class="${f.holes === 9 ? 'on' : ''}">9</button></div></div></div>
       <label for="f-booker">Booked (and deposit paid) by</label><select id="f-booker">${S.users.map((u) => opt(u.id, f.bookerId, u.name)).join('')}</select>
       <label>Who's splitting it</label><div class="chips">${S.users.map((u) => `<button class="chip ${f.roster.includes(u.id) ? 'on' : ''}" data-act="roster" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
-      <div class="grid2"><div><label for="f-total">Total cost ($)</label><input id="f-total" inputmode="decimal" value="${esc(f.total)}" placeholder="0"></div>
+      <label>Getting around</label><div class="seg">${RIDES.map(([k, l]) => `<button data-act="f-ride" data-v="${k}" class="${f.ride === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="grid2"><div><label for="f-total">Total cost ($)</label><input id="f-total" inputmode="decimal" value="${esc(f.total)}" placeholder="0" ${f.autoPrice && isLaCityName(f.course) ? 'readonly' : ''}></div>
         <div><label for="f-deposit">Deposit paid ($)</label><input id="f-deposit" inputmode="decimal" value="${esc(f.deposit)}" placeholder="0"></div></div>
+      ${isLaCityName(f.course) ? `<div class="row" style="margin-top:8px"><span class="grow tiny faint" id="f-quote"></span><button class="chip ${f.autoPrice ? 'on' : ''}" data-act="f-auto">${f.autoPrice ? 'City rate ✓' : 'Use City rate'}</button></div>` : ''}
+      <label for="f-balance">The rest, paid at the course by</label><select id="f-balance"><option value="">Not paid yet</option>${S.users.map((u) => opt(u.id, f.balanceBy, u.name)).join('')}</select>
       <div class="grid2"><div><label for="f-cancel">Free cancel (hours before)</label><input id="f-cancel" inputmode="numeric" value="${esc(f.cancelHours)}"></div>
         <div><label for="f-conf">Confirmation #</label><input id="f-conf" value="${esc(f.confirmation)}"></div></div>
       <label for="f-address">Address (for directions)</label><input id="f-address" value="${esc(f.address)}">
@@ -396,7 +437,7 @@ function readFormInputs() {
   const f = ui.form; if (!f || !$('#bf')) return;
   const v = (id) => $('#' + id)?.value ?? '';
   Object.assign(f, { course: v('f-course'), date: v('f-date'), time: v('f-time'), players: Number(v('f-players')), bookerId: Number(v('f-booker')),
-    total: v('f-total'), deposit: v('f-deposit'), cancelHours: v('f-cancel'), confirmation: v('f-conf'), address: v('f-address'), notes: v('f-notes') });
+    total: v('f-total'), deposit: v('f-deposit'), cancelHours: v('f-cancel'), confirmation: v('f-conf'), address: v('f-address'), notes: v('f-notes'), balanceBy: v('f-balance') });
   if ($('#paste')) f.paste = $('#paste').value;
 }
 async function readPaste() {
@@ -412,7 +453,7 @@ async function readPaste() {
     if (r.holes) f.holes = r.holes;
     if (r.bookerId) f.bookerId = r.bookerId;
     if (!f.roster.includes(f.bookerId)) f.roster.push(f.bookerId);
-    if (r.total != null) f.total = dollars(r.total);
+    if (r.total != null) { f.total = dollars(r.total); f.autoPrice = false; }
     if (r.deposit != null) f.deposit = dollars(r.deposit);
     if (r.cancelHours != null) f.cancelHours = r.cancelHours;
     if (r.confirmation) f.confirmation = r.confirmation;
@@ -427,8 +468,9 @@ async function saveBooking() {
   readFormInputs();
   const f = ui.form;
   if (!f.date || !f.time) return toast('Pick the date and tee time');
-  const body = { course: f.course, teeAt: laTime(f.date, f.time), players: f.players, holes: f.holes, bookerId: f.bookerId, roster: f.roster, total: f.total, deposit: f.deposit,
-    cancelHours: Number(f.cancelHours), confirmation: f.confirmation, address: f.address, notes: f.notes, source: f.source };
+  const auto = f.autoPrice && isLaCityName(f.course);
+  const body = { course: f.course, teeAt: laTime(f.date, f.time), players: f.players, holes: f.holes, bookerId: f.bookerId, roster: f.roster, total: auto ? '' : f.total, deposit: f.deposit,
+    cancelHours: Number(f.cancelHours), confirmation: f.confirmation, address: f.address, notes: f.notes, source: f.source, ride: f.ride, balanceBy: f.balanceBy ? Number(f.balanceBy) : null, autoPrice: auto };
   try {
     const r = f.id ? await api('PUT', `/api/bookings/${f.id}`, body) : await api('POST', '/api/bookings', body);
     ui.form = null; delete ui.briefs[r.booking.id];
@@ -674,6 +716,13 @@ function viewMe() {
       <div><label for="m-phone">Mobile number</label><input id="m-phone" inputmode="tel" value="${esc(me.phone)}" placeholder="(310) 555-0123" autocomplete="tel"></div></div>
       <div class="row" style="margin-top:16px"><span class="grow"><b>Wake-up calls</b><div class="tiny faint">A phone call 30 minutes before you need to leave, for tee times before 8 a.m. Switch it off per tee time any time.</div></span>
         <button class="switch ${me.wakeOk ? 'on' : ''}" data-act="me-wake" aria-label="Wake-up calls"></button></div>
+      ${S.features.calls && me.phone ? `<button class="outline block" style="margin-top:10px" data-act="test-call">${icon('phone')} Call me now (test)</button>` : ''}
+      <div class="over" style="margin:22px 0 2px">L.A. City Player Card</div>
+      <div class="row" style="margin-top:10px"><span class="grow"><b>I have a Player Card</b><div class="tiny faint">Twilight rates start an hour earlier for you. Kept here for safe keeping; only you see the number.</div></span>
+        <button class="switch ${me.card ? 'on' : ''}" data-act="me-card" aria-label="Has a Player Card"></button></div>
+      <div class="grid2"><div><label for="m-cardno">Card number</label><input id="m-cardno" value="${esc(me.cardNo)}" autocomplete="off" inputmode="numeric"></div>
+      <div><label for="m-cardexp">Renews on</label><input id="m-cardexp" type="date" value="${esc(me.cardExp)}"></div></div>
+      ${me.cardNo ? `<button class="chip" style="margin-top:8px" data-act="copy" data-v="${esc(me.cardNo)}">${icon('copy', 'sm')} Copy card number</button>` : ''}
       <button class="primary block" style="margin-top:16px" data-act="save-me">Save</button></section>
     <section class="card"><h2>Notifications</h2>
       <p class="small-text dim" style="margin-top:0">${S.push.mine ? `On for ${S.push.mine} device${S.push.mine > 1 ? 's' : ''}.` : perm === 'denied' ? 'Blocked. Allow notifications for this site in Chrome (lock icon › Permissions), then come back.' : perm === 'unsupported' ? 'This browser cannot do push notifications.' : 'Off on this device.'}
@@ -769,6 +818,7 @@ function render() {
   else if (extraViews[seg[0]]) html = extraViews[seg[0]](seg, q);
   else html = viewTeeTimes();
   app.innerHTML = html;
+  if ($('#f-quote')) refreshFormQuote();
   if (window.afterRender) window.afterRender();
 }
 // Screens with a half-filled form are not redrawn when fresh data arrives in the background.
@@ -802,6 +852,7 @@ document.addEventListener('submit', async (e) => {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
+  if (['f-date', 'f-time', 'f-players', 'f-course'].includes(t.id) && ui.form) { readFormInputs(); refreshFormQuote(); }
   if (t.id === 'f-course') {
     readFormInputs();
     const c = S.courses.find((x) => x.name.toLowerCase() === t.value.trim().toLowerCase());
@@ -836,6 +887,17 @@ document.addEventListener('click', async (e) => {
         toast(r.wake ? 'Wake-up call on' : 'Wake-up call off'); break;
       }
       case 'pick-tee': ui.tee[Number(el.dataset.c)] = v; render(); break;
+      case 'ride': await api('POST', `/api/bookings/${el.dataset.id}/ride`, { ride: v }); await refresh(); break;
+      case 'use-rate': await api('POST', `/api/bookings/${el.dataset.id}/price`, { auto: true }); await refresh(); toast('Using the City rate'); break;
+      case 'paid': {
+        const b = S.bookings.find((x) => x.id === Number(el.dataset.id));
+        await api('POST', `/api/bookings/${b.id}/paid`, { by: v ? Number(v) : null }); await refresh();
+        toast(v ? `Recorded: ${first(Number(v))} paid ${money(b.total - b.deposit)}` : 'Marked not paid yet'); break;
+      }
+      case 'f-ride': readFormInputs(); ui.form.ride = v; render(); break;
+      case 'f-auto': readFormInputs(); ui.form.autoPrice = !ui.form.autoPrice; render(); break;
+      case 'test-call': { await api('POST', '/api/me/test-call', {}); toast('Calling you now…'); break; }
+      case 'me-card': el.classList.toggle('on'); break;
       case 'cancel': if (confirm('Mark this tee time as cancelled? (Cancel it with the course too. The deposit stays split, since it is usually lost.)')) { await api('POST', `/api/bookings/${el.dataset.id}/cancel`, {}); await refresh(); } break;
       case 'restore': await api('POST', `/api/bookings/${el.dataset.id}/restore`, {}); await refresh(); break;
       case 'delete-booking': if (confirm('Delete this tee time and its deposit line completely?')) { await api('DELETE', `/api/bookings/${el.dataset.id}`); await refresh(false); go('#/'); } break;
@@ -898,7 +960,7 @@ document.addEventListener('click', async (e) => {
       case 'save-me': {
         const wakeOk = $('[data-act="me-wake"]').classList.contains('on');
         await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, home: $('#m-home').value, phone: $('#m-phone').value,
-          arriveMins: Number($('#m-arrive').value || 30), wakeOk });
+          arriveMins: Number($('#m-arrive').value || 30), wakeOk, card: $('[data-act="me-card"]').classList.contains('on'), cardNo: $('#m-cardno').value, cardExp: $('#m-cardexp').value });
         ui.briefs = {}; await refresh(); toast('Saved'); break;
       }
       case 'change-pass': await api('POST', '/api/me', { name: S.me.name, venmo: S.me.venmo, password: $('#p-old').value, newPassword: $('#p-new').value }); toast('Password changed'); $('#p-old').value = $('#p-new').value = ''; break;

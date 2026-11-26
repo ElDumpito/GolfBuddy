@@ -53,9 +53,15 @@ function addColumns(table, cols) {
 addColumns('courses', [['website', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL'], ['info', 'TEXT']]);
 // home/phone are only used for the drive-time and wake-up call features, and only once the person fills them in.
 addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], ['home_lon', 'REAL'], ['arrive_mins', 'INTEGER DEFAULT 30'],
-  ['wake_ok', 'INTEGER DEFAULT 0'], ['tee', 'TEXT']]);
+  ['wake_ok', 'INTEGER DEFAULT 0'], ['tee', 'TEXT'],
+  // L.A. City Player Card: whether they have one (it moves twilight pricing an hour earlier), and the
+  // card number and renewal date kept for safe keeping (only shown to the card's owner).
+  ['card', 'INTEGER DEFAULT 1'], ['card_no', 'TEXT'], ['card_exp', 'TEXT'], ['card_reminded', 'TEXT']]);
 // wake: NULL = automatic (on for tee times before 8 a.m.), 0 = off, 1 = on. wake_log: what the caller did, per person.
-addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT']]);
+addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT'],
+  // ride: walk | push | cart. price_auto: the total comes from the course's published rates.
+  // balance_by: who paid what was left at the course (total minus deposit). wx: last weather alert sent.
+  ['ride', "TEXT DEFAULT 'walk'"], ['price_auto', 'INTEGER DEFAULT 0'], ['balance_by', 'INTEGER'], ['wx', 'TEXT']]);
 const json = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
 // Courses the two of you have actually played, so the first bookings already know their address
@@ -99,14 +105,15 @@ function checkPassword(pw, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin, tee: u.tee || '' };
+const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin, tee: u.tee || '', card: u.card !== 0 };
 // The private part of a profile: only ever sent to that person.
-const ownProfile = (u) => u && ({ ...pubUser(u), phone: u.phone || '', home: u.home || '', homeSet: u.home_lat != null, arriveMins: u.arrive_mins ?? 30, wakeOk: !!u.wake_ok });
+const ownProfile = (u) => u && ({ ...pubUser(u), phone: u.phone || '', home: u.home || '', homeSet: u.home_lat != null, arriveMins: u.arrive_mins ?? 30, wakeOk: !!u.wake_ok,
+  cardNo: u.card_no || '', cardExp: u.card_exp || '' });
 const bookingRow = (b) => b && ({
   id: b.id, courseId: b.course_id, course: b.course, address: b.address || '', teeAt: b.tee_at, players: b.players, holes: b.holes,
   bookerId: b.booker_id, confirmation: b.confirmation || '', total: b.total, deposit: b.deposit, cancelAt: b.cancel_at,
   notes: b.notes || '', source: b.source || '', status: b.status, createdBy: b.created_by, created: b.created, updated: b.updated,
-  wake: b.wake == null ? null : !!b.wake,
+  wake: b.wake == null ? null : !!b.wake, ride: b.ride || 'walk', priceAuto: !!b.price_auto, balanceBy: b.balance_by || null,
 });
 const expenseRow = (e) => ({ id: e.id, ts: e.ts, bookingId: e.booking_id, paidBy: e.paid_by, amount: e.amount, category: e.category,
   description: e.description || '', split: json(e.split, {}), auto: e.auto || null, createdBy: e.created_by });
@@ -186,6 +193,14 @@ const api = {
       .run(b.courseId, b.course, b.address, b.teeAt, b.players, b.holes, b.bookerId, b.confirmation, b.total, b.deposit, b.cancelAt, b.notes, Date.now(),
         b.cancelReminded ? 1 : 0, b.eveReminded ? 1 : 0, id);
   },
+  setRide: (id, ride) => q('UPDATE bookings SET ride=?, updated=? WHERE id=?').run(ride, Date.now(), id),
+  setPrice: (id, total, auto) => q('UPDATE bookings SET total=?, price_auto=? WHERE id=?').run(total, auto ? 1 : 0, id),
+  setBalanceBy: (id, uid) => q('UPDATE bookings SET balance_by=? WHERE id=?').run(uid || null, id),
+  wxState: (id) => json(q('SELECT wx FROM bookings WHERE id=?').get(id)?.wx, null),
+  setWxState: (id, v) => q('UPDATE bookings SET wx=? WHERE id=?').run(JSON.stringify(v), id),
+  setCard: (id, c) => q('UPDATE users SET card=?, card_no=?, card_exp=? WHERE id=?').run(c.card ? 1 : 0, c.cardNo || null, c.cardExp || null, id),
+  markCardReminded: (id, exp) => q('UPDATE users SET card_reminded=? WHERE id=?').run(exp, id),
+  allUsersRaw: () => q('SELECT * FROM users').all(),
   setWake: (id, v) => q('UPDATE bookings SET wake=? WHERE id=?').run(v == null ? null : v ? 1 : 0, id),
   wakeLog: (id) => json(q('SELECT wake_log FROM bookings WHERE id=?').get(id)?.wake_log, {}),
   setWakeLog: (id, log) => q('UPDATE bookings SET wake_log=? WHERE id=?').run(JSON.stringify(log), id),

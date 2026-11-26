@@ -9,8 +9,10 @@ const { parseConfirmation, laTime, laParts, fmtWhen } = require('./parse');
 const { vapidKeys, sendPush } = require('./push');
 const svc = require('./services');
 const { brief, wakeOn } = require('./brief');
-const { wakeTick, e164, twilioReady } = require('./wake');
+const { wakeTick, e164, twilioReady, placeCall } = require('./wake');
 const track = require('./track');
+const rates = require('./rates');
+const { placeOf } = require('./brief');
 
 const PORT = Number(process.env.PORT || 8790);
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -116,10 +118,15 @@ function readBooking(body, prev) {
   const known = new Set(userIds());
   let roster = Array.isArray(body.roster) ? [...new Set(body.roster.map(Number))].filter((id) => known.has(id)) : (prev ? prev.roster.map((r) => r.userId) : [...known]);
   if (!roster.includes(bookerId)) roster.unshift(bookerId);
+  const ride = ['walk', 'push', 'cart'].includes(body.ride) ? body.ride : prev?.ride || 'walk';
+  let balanceBy = body.balanceBy === undefined ? prev?.balanceBy ?? null : body.balanceBy ? Number(body.balanceBy) : null;
+  if (balanceBy && !known.has(balanceBy)) balanceBy = null;
   return {
     b: { course, address: str(body.address, 200), phone: str(body.phone, 30), teeAt, players, holes, bookerId, confirmation: str(body.confirmation, 60),
       total, deposit, cancelHours, cancelAt: teeAt - cancelHours * HOUR, notes: str(body.notes, 2000), source: str(body.source, 30) || 'Manual' },
-    roster,
+    roster, ride, balanceBy,
+    // An empty total on an L.A. City course is filled in from the published rates (and kept up to date).
+    autoPrice: body.total === '' || body.total == null || !!body.autoPrice,
   };
 }
 
@@ -142,6 +149,38 @@ function syncDeposit(id) {
   else db.addExpense({ ...e, ts: b.created, bookingId: id, auto: 'deposit', createdBy: b.createdBy });
 }
 
+// What's left after the deposit, paid at the course by one person and shared by everyone on the
+// booking. Like the deposit, it's one ledger line that follows the booking's total and roster.
+function syncBalance(id) {
+  const b = db.bookingById(id);
+  const cur = db.autoExpense(id, 'balance');
+  const ids = b.roster.map((r) => r.userId);
+  const amount = Math.max(0, b.total - b.deposit);
+  if (!b.balanceBy || !amount || !ids.length || b.status === 'cancelled') { if (cur) db.deleteExpense(cur.id); return; }
+  const e = { paidBy: b.balanceBy, amount, category: 'Green fees', description: `${b.course} · paid at the course${b.deposit ? ' (after the deposit)' : ''}`, split: evenSplit(amount, ids) };
+  if (cur) db.updateExpense(cur.id, e);
+  else db.addExpense({ ...e, ts: Date.now(), bookingId: id, auto: 'balance', createdBy: b.balanceBy });
+}
+// Each person's Player Card (for twilight pricing), keyed by id.
+const cardMap = () => Object.fromEntries(db.users().map((u) => [u.id, u.card]));
+// Fill in an L.A. City booking's total from the published rates, if it's set to automatic.
+function syncPrice(id) {
+  const b = db.bookingById(id);
+  const raw = db.raw.prepare('SELECT price_auto FROM bookings WHERE id=?').get(id);
+  if (!raw?.price_auto) return;
+  const q = rates.quoteBooking(b, cardMap());
+  if (q && !q.unavailable && q.total !== b.total) db.setPrice(id, q.total, true);
+}
+function afterSave(id, r) {
+  db.raw.prepare('UPDATE bookings SET ride=?, balance_by=? WHERE id=?').run(r.ride, r.balanceBy || null, id);
+  const b = db.bookingById(id);
+  if (r.autoPrice && rates.isLaCity(b.course)) db.setPrice(id, b.total, true);
+  else if (!r.autoPrice) db.setPrice(id, b.total, false);
+  syncPrice(id);
+  syncDeposit(id);
+  syncBalance(id);
+}
+
 function bookingLine(b) {
   return `${fmtWhen(b.teeAt)} · ${b.players} player${b.players === 1 ? '' : 's'} · booked by ${firstName(b.bookerId)}`;
 }
@@ -157,7 +196,7 @@ function createBooking(body, me) {
   if (now >= eveAt(b)) db.markReminded(id, 'eve');
   db.setRoster(id, r.roster);
   db.setRsvp(id, me.id, 'in');
-  syncDeposit(id);
+  afterSave(id, r);
   const saved = db.bookingById(id);
   const free = saved.cancelAt > now ? `\nFree cancel until ${fmtWhen(saved.cancelAt)}` : '';
   notify(others(me.id, r.roster), { title: `⛳ New tee time: ${saved.course}`, body: bookingLine(saved) + free, url: bookingUrl(id), tag: `b${id}`, bookingId: id, actions: RSVP_ACTIONS });
@@ -178,7 +217,7 @@ function updateBooking(id, body, me) {
   b.eveReminded = moved ? now >= eveAt(b) : old.eveReminded;
   db.updateBooking(id, b);
   db.setRoster(id, r.roster);
-  syncDeposit(id);
+  afterSave(id, r);
   const saved = db.bookingById(id);
   if (moved || b.course !== prev.course) {
     notify(others(me.id, r.roster), { title: `✏️ Tee time changed: ${saved.course}`, body: `${firstName(me.id)} updated it: ${bookingLine(saved)}`, url: bookingUrl(id), tag: `b${id}` });
@@ -187,7 +226,49 @@ function updateBooking(id, body, me) {
 }
 
 // ---- reminders (checked every minute) ---------------------------------------
-async function reminderTick(now = Date.now()) {
+// ---- weather -------------------------------------------------------------------
+// Rain or wind worth a heads-up, and when it has cleared again.
+const WX_BAD = { pop: 40, wind: 20 };
+const WX_GOOD = { pop: 25, wind: 15 };
+async function forecast(b) {
+  try {
+    const place = await placeOf(db.courseById(b.courseId), b);
+    if (place?.lat == null) return null;
+    const w = await svc.weatherFor(place.lat, place.lon, b.teeAt, b.holes === 9 ? 2.25 : 4.5);
+    return w?.at ? w : null;
+  } catch { return null; }
+}
+function wxLine(w) {
+  if (!w) return '';
+  const pop = w.popMax ?? w.at.pop ?? 0, wind = w.windMax ?? w.at.wind ?? 0;
+  return `${w.at.temp}°, ${w.at.sky.toLowerCase()}${pop >= 20 ? `, ${pop}% chance of rain` : ''}${wind >= 12 ? `, wind to ${wind} mph` : ''}`;
+}
+const wxLevel = (w) => {
+  const pop = w.popMax ?? w.at.pop ?? 0, wind = w.windMax ?? w.at.wind ?? 0;
+  return pop >= WX_BAD.pop || wind >= WX_BAD.wind ? 'bad' : pop < WX_GOOD.pop && wind < WX_GOOD.wind ? 'good' : 'meh';
+};
+// Every half hour: for tee times in the next 5 days, alert once when the forecast turns bad,
+// and once more if it clears up again afterwards.
+async function weatherTick(now = Date.now(), getWx = forecast) {
+  for (const b of db.upcoming(now + HOUR, now + 5 * 24 * HOUR)) {
+    const w = await getWx(b);
+    if (!w) continue;
+    const level = wxLevel(w), prev = db.wxState(b.id) || {};
+    const going = b.roster.filter((r) => r.rsvp !== 'out').map((r) => r.userId);
+    const pop = w.popMax ?? w.at.pop ?? 0, wind = w.windMax ?? w.at.wind ?? 0;
+    const free = now < b.cancelAt ? ` Free cancel until ${fmtWhen(b.cancelAt)}.` : '';
+    if (level === 'bad' && prev.level !== 'bad') {
+      db.setWxState(b.id, { level, at: now, pop, wind });
+      await notify(going, { title: `${pop >= WX_BAD.pop ? '🌧️ Rain' : '💨 Wind'} in the forecast: ${b.course}`, body: `${fmtWhen(b.teeAt)}: ${wxLine(w)}.${free}`,
+        url: bookingUrl(b.id), tag: `wx${b.id}`, bookingId: b.id, actions: now < b.cancelAt ? RSVP_ACTIONS : undefined });
+    } else if (level === 'good' && prev.level === 'bad') {
+      db.setWxState(b.id, { level, at: now, pop, wind });
+      await notify(going, { title: `☀️ Forecast cleared: ${b.course}`, body: `${fmtWhen(b.teeAt)}: now ${wxLine(w)}.`, url: bookingUrl(b.id), tag: `wx${b.id}` });
+    } else if (!prev.level) db.setWxState(b.id, { level, at: now, pop, wind });
+  }
+}
+
+async function reminderTick(now = Date.now(), getWx = forecast) {
   for (const b of db.remindersDue()) {
     const roster = db.roster(b.id);
     const going = roster.filter((r) => r.rsvp !== 'out').map((r) => r.userId);
@@ -195,13 +276,24 @@ async function reminderTick(now = Date.now()) {
       db.markReminded(b.id, 'cancel');
       if (now < b.cancelAt) {
         const hrs = Math.max(1, Math.round((b.cancelAt - now) / HOUR));
-        await notify(going, { title: `⏰ Last call to cancel: ${b.course}`, body: `Tee time ${fmtWhen(b.teeAt)}. Free cancellation ends ${fmtWhen(b.cancelAt)} (about ${hrs}h). Still in?`,
+        const w = wxLine(await getWx(b));
+        await notify(going, { title: `⏰ Last call to cancel: ${b.course}`, body: `Tee time ${fmtWhen(b.teeAt)}.${w ? ` Forecast: ${w}.` : ''} Free cancellation ends ${fmtWhen(b.cancelAt)} (about ${hrs}h). Still in?`,
           url: bookingUrl(b.id), tag: `b${b.id}`, bookingId: b.id, actions: RSVP_ACTIONS, requireInteraction: true });
       }
     }
     if (!b.eveReminded && now >= eveAt(b)) {
       db.markReminded(b.id, 'eve');
-      if (now < b.teeAt) await notify(going, { title: `🏌️ Tomorrow: ${b.course}`, body: `${fmtWhen(b.teeAt)}. Tap for the details and directions.`, url: bookingUrl(b.id), tag: `b${b.id}` });
+      const w = wxLine(await getWx(b));
+      if (now < b.teeAt) await notify(going, { title: `🏌️ Tomorrow: ${b.course}`, body: `${fmtWhen(b.teeAt)}.${w ? ` ${w[0].toUpperCase()}${w.slice(1)}.` : ''} Tap for the details and directions.`, url: bookingUrl(b.id), tag: `b${b.id}` });
+    }
+  }
+  // Player Card renewal: two weeks' notice, once per expiry date.
+  for (const u of db.allUsersRaw()) {
+    if (!u.card_exp || u.card_reminded === u.card_exp) continue;
+    const exp = Date.parse(`${u.card_exp}T12:00:00-08:00`);
+    if (Number.isFinite(exp) && now >= exp - 14 * 24 * HOUR) {
+      db.markCardReminded(u.id, u.card_exp);
+      await notify([u.id], { title: '🪪 Player Card renewal', body: `Your L.A. City Player Card ${now > exp ? 'expired' : 'expires'} ${fmtWhen(exp).split(',').slice(0, 2).join(',')}. Renew with any L.A. City starter ($25 a year).`, url: '/#/me', tag: 'card' });
     }
   }
 }
@@ -261,6 +353,8 @@ function state(me) {
     features: { google: !!svc.key('google_server_key'), calls: twilioReady() },
     wakeOn: Object.fromEntries(db.bookings(Date.now() - 6 * HOUR).map((b) => [b.id, wakeOn(b)])),
     ...track.stateFor(me),
+    // Published-rate price for each L.A. City tee time, so the app can show where a total comes from.
+    quotes: Object.fromEntries(db.bookings(Date.now() - 180 * 24 * HOUR).filter((b) => rates.isLaCity(b.course)).map((b) => [b.id, rates.quoteBooking(b, cardMap())])),
   };
 }
 
@@ -305,6 +399,13 @@ async function api(req, res, url, me) {
       if (wakeOk && (!phone || homeLat == null)) return bad('Wake-up calls need your phone number and home address');
       db.setTravel(me.id, { phone, home, homeLat, homeLon, arriveMins, wakeOk, tee: str(body.tee, 30) });
     }
+    if ('cardNo' in body || 'card' in body) {
+      const cardNo = str(body.cardNo, 24);
+      const cardExp = str(body.cardExp, 10);
+      if (cardExp && !/^\d{4}-\d{2}-\d{2}$/.test(cardExp)) return bad('Card expiry: pick a date');
+      db.setCard(me.id, { card: body.card !== false, cardNo, cardExp });
+      for (const b of db.upcoming(Date.now(), Date.now() + 60 * 24 * HOUR)) syncPrice(b.id), syncBalance(b.id);
+    }
     if (body.newPassword) {
       if (!db.checkPassword(String(body.password || ''), me.pass)) return bad('Current password is wrong');
       if (String(body.newPassword).length < 6) return bad('New password needs at least 6 characters');
@@ -333,6 +434,28 @@ async function api(req, res, url, me) {
     if (!b) return bad('That tee time no longer exists', 404);
     if (m === 'PUT' && seg.length === 3) { const r = updateBooking(id, body, me); return r.err ? bad(r.err, r.code) : send(res, 200, r); }
     if (m === 'GET' && seg[3] === 'brief') return send(res, 200, await brief(b, me));
+    if (m === 'POST' && seg[3] === 'ride') {
+      if (!['walk', 'push', 'cart'].includes(body.ride)) return bad('Walk, push cart or riding cart?');
+      db.setRide(id, body.ride); syncPrice(id); syncBalance(id);
+      return send(res, 200, { booking: db.bookingById(id) });
+    }
+    if (m === 'POST' && seg[3] === 'price') {
+      // Use the published rate (auto), or keep a total typed by hand.
+      if (body.auto) { if (!rates.isLaCity(b.course)) return bad('Rates are only known for L.A. City courses'); db.setPrice(id, b.total, true); syncPrice(id); }
+      else { const t = toCents(body.total); if (!(t >= 0 && t <= 1e7)) return bad('Enter a total'); db.setPrice(id, t, false); }
+      syncDeposit(id); syncBalance(id);
+      return send(res, 200, { booking: db.bookingById(id) });
+    }
+    if (m === 'POST' && seg[3] === 'paid') {
+      // Who paid what was left at the course. null = not yet.
+      const by = body.by ? Number(body.by) : null;
+      if (by && !b.roster.some((r) => r.userId === by) && !db.userById(by)) return bad('Who paid?');
+      if (by && !(b.total > b.deposit)) return bad('Add the total cost first');
+      db.setBalanceBy(id, by); syncBalance(id);
+      const saved = db.bookingById(id);
+      if (by) notify(others(me.id, b.roster.map((r) => r.userId)), { title: `💵 ${firstName(by)} paid at ${b.course}`, body: `${money(saved.total - saved.deposit)} after the ${money(saved.deposit)} deposit, split ${b.roster.length} ways. ${firstName(me.id)} recorded it.`, url: bookingUrl(id), tag: `p${id}` });
+      return send(res, 200, { booking: saved });
+    }
     if (m === 'POST' && seg[3] === 'wake') {
       db.setWake(id, body.wake == null ? null : !!body.wake);
       db.setWakeLog(id, {}); // plan again from scratch
@@ -351,13 +474,13 @@ async function api(req, res, url, me) {
     if (m === 'POST' && (seg[3] === 'cancel' || seg[3] === 'restore')) {
       const cancel = seg[3] === 'cancel';
       db.setBookingStatus(id, cancel ? 'cancelled' : 'active');
+      syncBalance(id);
       notify(others(me.id, b.roster.map((r) => r.userId)), { title: cancel ? `🚫 Cancelled: ${b.course}` : `↩️ Back on: ${b.course}`, body: `${firstName(me.id)} ${cancel ? 'cancelled' : 'restored'} ${fmtWhen(b.teeAt)}`, url: bookingUrl(id), tag: `b${id}` });
       return send(res, 200, { booking: db.bookingById(id) });
     }
     if (m === 'DELETE' && seg.length === 3) {
       if (b.createdBy !== me.id && !me.is_admin) return bad('Only whoever added it can delete it', 403);
-      const dep = db.autoExpense(id, 'deposit');
-      if (dep) db.deleteExpense(dep.id);
+      for (const kind of ['deposit', 'balance']) { const e = db.autoExpense(id, kind); if (e) db.deleteExpense(e.id); }
       db.raw.prepare('DELETE FROM booking_players WHERE booking_id=?').run(id);
       db.raw.prepare('DELETE FROM bookings WHERE id=?').run(id);
       return send(res, 200, { ok: true });
@@ -488,6 +611,27 @@ async function api(req, res, url, me) {
     }
   }
 
+  if (p === '/api/quote' && m === 'GET') {
+    // Live price while filling in a tee time (L.A. City courses only).
+    const qp = url.searchParams;
+    const b = { course: qp.get('course'), teeAt: Number(qp.get('teeAt')), holes: Number(qp.get('holes')) === 9 ? 9 : 18, players: Math.min(8, Math.max(1, Number(qp.get('players')) || 2)),
+      ride: qp.get('ride'), roster: String(qp.get('roster') || '').split(',').filter(Boolean).map((x) => ({ userId: Number(x) })) };
+    if (!Number.isFinite(b.teeAt)) return bad('Pick the date and time');
+    return send(res, 200, { quote: rates.quoteBooking(b, cardMap()) });
+  }
+
+  if (p === '/api/me/test-call' && m === 'POST') {
+    // A short call to your own phone, to check the wake-up calls work.
+    if (!twilioReady()) return bad('Add the Twilio details in Me › Admin first');
+    const to = e164(me.phone);
+    if (!to) return bad('Add your mobile number in Me first');
+    if (limited({ headers: { 'cf-connecting-ip': `call:${me.id}` }, socket: {} }, 3, HOUR)) return bad('That’s 3 test calls this hour. Try again later.', 429);
+    try {
+      const sid = await placeCall(to, `<Response><Pause length="1"/><Say voice="Polly.Joanna">Hi ${String(firstName(me.id)).replace(/[<>&'"]/g, '')}. This is a GolfBuddy test call. Your wake-up calls are working. Goodbye.</Say></Response>`);
+      return send(res, 200, { ok: true, sid });
+    } catch (e) { return bad(e.message, 502); }
+  }
+
   if (p === '/api/practice' && m === 'GET') {
     // Driving ranges and simulators within 30 miles of where you are (or home).
     let near = { lat: Number(url.searchParams.get('lat')), lon: Number(url.searchParams.get('lon')) };
@@ -577,7 +721,9 @@ if (require.main === module) {
   setInterval(() => reminderTick().catch((e) => console.error('reminders:', e)), 60000);
   setInterval(() => wakeTick(Date.now(), { notify }).catch((e) => console.error('wake-up calls:', e)), 60000);
   setInterval(() => db.cachePrune(), 6 * HOUR);
+  setInterval(() => weatherTick().catch((e) => console.error('weather alerts:', e)), 30 * 60000);
+  setTimeout(() => weatherTick().catch(() => {}), 60000);
   setTimeout(() => reminderTick().catch(() => {}), 5000);
 }
 
-module.exports = { server, reminderTick, transfers, evenSplit, eveAt, notify };
+module.exports = { server, reminderTick, weatherTick, transfers, evenSplit, eveAt, notify, wxLevel };

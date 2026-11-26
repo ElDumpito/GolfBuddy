@@ -137,4 +137,4 @@ async function wakeTick(now = Date.now(), deps = {}) {
   }
 }
 
-module.exports = { wakeTick, e164, script, twilioReady, CALL_BEFORE };
+module.exports = { wakeTick, e164, script, twilioReady, placeCall, CALL_BEFORE };

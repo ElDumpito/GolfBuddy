@@ -47,6 +47,28 @@ function until(t) {
   if (days === 1) return 'Tomorrow';
   return days < 7 ? fmt(t, { weekday: 'long' }) : `In ${days} days`;
 }
+// ---------- photos (camera reading) ----------
+// Take or pick a photo, shrink it to ~1600 px (faster upload, cheaper to read), and return it.
+function snapPhoto() {
+  return new Promise((ok, no) => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+    inp.onchange = async () => { const f = inp.files[0]; if (!f) return ok(null); try { ok(await shrinkPhoto(f)); } catch (e) { no(e); } };
+    inp.click();
+  });
+}
+async function shrinkPhoto(file, max = 1600) {
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const k = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bitmap.width * k); c.height = Math.round(bitmap.height * k);
+  c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
+  return { dataUrl: c.toDataURL('image/jpeg', 0.85), bitmap };
+}
+// Photo → what the server read from it (nothing is saved until you confirm).
+async function readPhoto(kind, extra = {}, photo) {
+  const p = photo || await snapPhoto(); if (!p) return null;
+  toast('Reading the photo…');
+  return (await api('POST', '/api/read', { kind, image: p.dataUrl, ...extra })).read;
+}
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2800); }
 async function api(method, path, body) {
   const res = await fetch(path, { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -597,19 +619,20 @@ function viewAddExpense(q) {
   if (!ui.exp) {
     const b = q.get('b') ? S.bookings.find((x) => x.id === Number(q.get('b'))) : null;
     ui.exp = { amount: q.get('amt') || '', category: q.get('cat') || 'Food & drinks', description: '', paidBy: S.me.id, mode: 'even',
-      ids: b ? b.roster.map((r) => r.userId) : S.users.map((u) => u.id), full: S.users.find((u) => u.id !== S.me.id)?.id || S.me.id, shares: {}, bookingId: b ? b.id : '' };
+      ids: b ? b.roster.map((r) => r.userId) : defaultGroup(), full: S.users.find((u) => u.id !== S.me.id)?.id || S.me.id, shares: {}, bookingId: b ? b.id : '' };
   }
   const x = ui.exp;
   const recent = S.bookings.filter((b) => b.teeAt > Date.now() - 60 * 24 * HOUR).sort((a, b) => b.teeAt - a.teeAt);
   return frame({
     title: 'Add an expense', back: x.bookingId ? `#/b/${x.bookingId}` : '#/money', tab: 'money',
     body: `<section class="card" id="xf">
+      ${S.features.vision ? `<button class="chip" style="margin-bottom:12px" data-act="x-receipt">${icon('camera', 'sm')} Read a receipt</button>` : ''}
       <label style="margin-top:0">What for</label><div class="chips">${S.categories.filter((c) => c !== 'Deposit').map((c) => `<button class="chip ${x.category === c ? 'on' : ''}" data-act="x-cat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
       <div class="grid2"><div><label for="x-amt">Amount ($)</label><input id="x-amt" inputmode="decimal" value="${esc(x.amount)}" placeholder="0.00"></div>
         <div><label for="x-paid">Paid by</label><select id="x-paid">${S.users.map((u) => `<option value="${u.id}" ${u.id === x.paidBy ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div></div>
       <label for="x-desc">Note (optional)</label><input id="x-desc" value="${esc(x.description)}" placeholder="Burgers at the turn">
       <label>Split</label><div class="seg"><button data-act="x-mode" data-v="even" class="${x.mode === 'even' ? 'on' : ''}">Evenly</button><button data-act="x-mode" data-v="full" class="${x.mode === 'full' ? 'on' : ''}">All for one</button><button data-act="x-mode" data-v="custom" class="${x.mode === 'custom' ? 'on' : ''}">Amounts</button></div>
-      <div style="margin-top:10px">${x.mode === 'even' ? `<div class="chips">${S.users.map((u) => `<button class="chip ${x.ids.includes(u.id) ? 'on' : ''}" data-act="x-id" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>`
+      <div style="margin-top:10px">${x.mode === 'even' ? `<div class="chips">${pickable(x.ids).map((u) => `<button class="chip ${x.ids.includes(u.id) ? 'on' : ''}" data-act="x-id" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>`
         : x.mode === 'full' ? `<label for="x-full">It was all for</label><select id="x-full">${S.users.map((u) => `<option value="${u.id}" ${u.id === x.full ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>`
         : S.users.map((u) => `<label for="x-sh-${u.id}">${esc(u.name)}'s share ($)</label><input id="x-sh-${u.id}" data-share="${u.id}" inputmode="decimal" value="${esc(x.shares[u.id] || '')}">`).join('')}</div>
       <label for="x-b">Tee time (optional)</label><select id="x-b"><option value="">None</option>${recent.map((b) => `<option value="${b.id}" ${String(b.id) === String(x.bookingId) ? 'selected' : ''}>${esc(b.course)} · ${fDay(b.teeAt)}</option>`).join('')}</select>
@@ -708,7 +731,7 @@ function viewRound(id) {
   const split18 = r.holes === 18;
   return frame({
     title: r.course, back: r.bookingId ? `#/b/${r.bookingId}` : '#/scores', tab: 'scores', right: `<a class="btn quiet" href="#/r/${r.id}/shots" aria-label="Shots">${icon('target')}</a>`,
-    body: `<section class="card">
+    body: `${cardReview(r)}<section class="card">
       <div class="holebar">${r.pars.map((_, k) => `<button class="${k === i ? 'on' : done(k) ? 'done' : ''}" data-act="hole" data-v="${k}">${r.startHole + k}</button>`).join('')}</div>
       <div class="holehead"><div><div class="h">Hole ${holeNo}</div><div class="facts">${holeFacts(r, holeNo)}</div></div><button class="chip" data-act="par" data-v="${i}">Par ${par} ↻</button></div>
       <div class="list">${sc.map((s) => { const x = s.strokes[i]; return `<div class="score"><span class="nm">${esc(user(s.userId).name)}</span>
@@ -721,9 +744,47 @@ function viewRound(id) {
       <tr><td>Par</td>${r.pars.map((p, k) => `<td class="faint">${p}</td>${split18 && k === 8 ? `<td class="sum faint">${sum(r.pars, 0, 9)}</td>` : ''}`).join('')}${split18 ? `<td class="sum faint">${sum(r.pars, 9, 18)}</td>` : ''}<td class="sum faint">${sum(r.pars, 0, r.holes)}</td></tr>
       ${sc.map((s) => `<tr><td>${esc(first(s.userId))}</td>${r.pars.map((_, k) => cell(s, k) + (split18 && k === 8 ? `<td class="sum">${sum(s.strokes, 0, 9)}</td>` : '')).join('')}${split18 ? `<td class="sum">${sum(s.strokes, 9, 18)}</td>` : ''}<td class="sum">${sum(s.strokes, 0, r.holes)}</td></tr>`).join('')}
     </table><div style="margin-top:12px">${roundSummary(r)}</div></section>
+    ${S.features.vision && !ui.cardRead?.[r.id] ? `<button class="card link-row" style="width:100%;text-align:left" data-act="r-read" data-id="${r.id}"><span class="ic">${icon('camera')}</span><span class="grow"><b>Read a paper scorecard</b><div class="small-text dim">Snap the card and the scores fill in after you check them</div></span><span class="faint">${icon('chev')}</span></button>` : ''}
     <a class="card link-row" href="#/r/${r.id}/post"><span class="ic">${icon('flag')}</span><span class="grow"><b>Post to GHIN</b><div class="small-text dim">Your adjusted score, hole by hole, ready to enter</div></span><span class="faint">${icon('chev')}</span></a>
     <button class="quiet danger" data-act="del-round" data-id="${r.id}">Delete this scorecard</button>`,
   });
+}
+// After a scorecard photo: who each written row belongs to, then fill the card.
+function cardReview(r) {
+  const R = ui.cardRead?.[r.id]; if (!R) return '';
+  const opts = (k) => `<option value="">Skip this row</option>${r.scores.map((s) => `<option value="${s.userId}" ${R.map[k] === s.userId ? 'selected' : ''}>${esc(user(s.userId).name)}</option>`).join('')}`;
+  return `<section class="card"><div class="card-head"><h2>From the photo</h2></div>
+    ${R.read.players.length ? R.read.players.map((p, k) => `<label for="cr-${k}">“${esc(p.name || `Row ${k + 1}`)}” <span class="num faint">${p.strokes.map((x) => x ?? '·').join(' ')}</span></label><select id="cr-${k}" data-cr="${k}" data-rid="${r.id}">${opts(k)}</select>`).join('')
+      : '<div class="empty">No scores could be read. Try a flatter, brighter photo.</div>'}
+    ${R.read.pars ? `<div class="row" style="margin-top:12px"><span class="grow small-text">Use the pars printed on the card <span class="num faint">${R.read.pars.map((x) => x ?? '·').join(' ')}</span></span><button class="switch ${R.pars ? 'on' : ''}" data-act="cr-pars" data-id="${r.id}"></button></div>` : ''}
+    <p class="tiny faint" style="margin:10px 0 0">Blank or unreadable holes keep what's already on the card. Check a few numbers before you fill it in.</p>
+    <div class="row" style="margin-top:12px"><button class="grow outline" data-act="cr-cancel" data-id="${r.id}">Cancel</button>${R.read.players.length ? `<button class="grow primary" data-act="cr-fill" data-id="${r.id}">Fill in the card</button>` : ''}</div></section>`;
+}
+// Match written names to players by first name; anyone left over goes in order.
+function matchRows(r, rows) {
+  const left = r.scores.map((s) => s.userId), map = {};
+  rows.forEach((p, k) => {
+    const n = (p.name || '').toLowerCase().trim(); if (!n) return;
+    const u = left.find((id) => { const f = user(id).name.toLowerCase().split(/\s+/)[0]; return f && (n.startsWith(f) || f.startsWith(n.split(/\s+/)[0])); });
+    if (u) { map[k] = u; left.splice(left.indexOf(u), 1); }
+  });
+  rows.forEach((_, k) => { if (!(k in map) && left.length) map[k] = left.shift(); });
+  return map;
+}
+async function fillFromCard(r) {
+  const R = ui.cardRead[r.id];
+  $$('[data-cr]').forEach((el) => { R.map[el.dataset.cr] = el.value ? Number(el.value) : null; });
+  const scores = {};
+  R.read.players.forEach((p, k) => {
+    const uid = R.map[k]; if (!uid) return;
+    const cur = [...(r.scores.find((s) => s.userId === uid)?.strokes || [])];
+    while (cur.length < r.holes) cur.push(null);
+    scores[uid] = cur.map((x, i) => p.strokes[i] ?? x ?? null);
+  });
+  const body = { scores };
+  if (R.pars && R.read.pars) body.pars = r.pars.map((x, i) => R.read.pars[i] ?? x);
+  const x = await api('PUT', `/api/rounds/${r.id}`, body);
+  Object.assign(r, x.round); delete ui.cardRead[r.id]; render(); toast('Scorecard filled in');
 }
 function firstOpenHole(r) { for (let k = 0; k < r.holes; k++) if (!r.scores.every((s) => s.strokes[k])) return k; return 0; }
 function saveRoundSoon(r, payload) {
@@ -877,6 +938,7 @@ function viewMe() {
       <div class="over" style="margin:22px 0 2px">L.A. City Player Card</div>
       <div class="row" style="margin-top:10px"><span class="grow"><b>I have a Player Card</b><div class="tiny faint">Twilight rates start an hour earlier for you. Kept here for safe keeping; only you see the number.</div></span>
         <button class="switch ${me.card ? 'on' : ''}" data-act="me-card" aria-label="Has a Player Card"></button></div>
+      <button class="chip" style="margin-top:10px" data-act="me-card-scan">${icon('camera', 'sm')} Scan my card</button>
       <div class="grid2"><div><label for="m-cardno">Card number</label><input id="m-cardno" value="${esc(me.cardNo)}" autocomplete="off" inputmode="numeric"></div>
       <div><label for="m-cardexp">Renews on</label><input id="m-cardexp" type="date" value="${esc(me.cardExp)}"></div></div>
       ${me.cardNo ? `<button class="chip" style="margin-top:8px" data-act="copy" data-v="${esc(me.cardNo)}">${icon('copy', 'sm')} Copy card number</button>` : ''}
@@ -910,6 +972,7 @@ function viewAdmin() {
     ${row('twilio_sid', 'Twilio Account SID', 'AC…')}
     ${row('twilio_token', 'Twilio Auth Token', '', 'password')}
     ${row('twilio_from', 'Twilio phone number', '+13105550123')}
+    ${row('anthropic_key', 'Anthropic API key', 'sk-ant-… for reading photos (console.anthropic.com)', 'password')}
     <div class="row" style="margin-top:14px"><button class="primary grow" data-act="save-keys">Save keys</button><button class="outline" data-act="test-google" ${S.features.google ? '' : 'disabled'}>Test Google</button></div>
     ${inboundAdmin()}
     <label for="a-user" style="margin-top:22px">Reset someone's password</label><div class="row"><select id="a-user" class="grow">${S.users.filter((u) => u.id !== S.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
@@ -1100,6 +1163,36 @@ document.addEventListener('click', async (e) => {
       case 'pending-no': ui.pendingPay = null; render(); break;
       // scores
       case 'r-open': ui.round.open = true; render(); break;
+      case 'r-read': {
+        const r = S.rounds.find((x) => x.id === Number(el.dataset.id));
+        const read = await readPhoto('scorecard', { roundId: r.id }); if (!read) break;
+        (ui.cardRead ||= {})[r.id] = { read, map: matchRows(r, read.players), pars: !!read.pars };
+        window.scrollTo(0, 0); render(); break;
+      }
+      case 'cr-pars': ui.cardRead[el.dataset.id].pars = !ui.cardRead[el.dataset.id].pars; el.classList.toggle('on'); break;
+      case 'cr-cancel': delete ui.cardRead[el.dataset.id]; render(); break;
+      case 'cr-fill': await fillFromCard(S.rounds.find((x) => x.id === Number(el.dataset.id))); break;
+      case 'x-receipt': {
+        readExpInputs();
+        const read = await readPhoto('receipt'); if (!read) break;
+        const x = ui.exp;
+        if (read.total) x.amount = (read.total / 100).toFixed(2);
+        x.category = read.category || x.category;
+        x.description = [read.merchant, read.note].filter(Boolean).join(' · ').slice(0, 100) || x.description;
+        render(); toast(read.total ? 'Check the amount, then add it' : 'Couldn’t find a total; type it in'); break;
+      }
+      case 'me-card-scan': {
+        // The barcode first (free, instant, on the phone); the photo reader only if there's no barcode.
+        const p = await snapPhoto(); if (!p) break;
+        let no = '';
+        if ('BarcodeDetector' in window) { try { no = (await new BarcodeDetector().detect(p.bitmap))[0]?.rawValue || ''; } catch { /* no barcode */ } }
+        let exp = null;
+        if (!no && S.features.vision) { const read = await readPhoto('card', {}, p); no = read?.cardNo || ''; exp = read?.cardExp; }
+        if (!no) { toast(S.features.vision ? 'Couldn’t read the card. Type the number in.' : 'No barcode found. Type the number in.'); break; }
+        $('#m-cardno').value = no; if (exp) $('#m-cardexp').value = exp;
+        $('[data-act="me-card"]').classList.add('on');
+        toast('Got it. Tap Save to keep it.'); break;
+      }
       case 'r-holes': ui.round.course = $('#r-course').value; ui.round.date = $('#r-date').value; ui.round.holes = v === '18' ? 18 : 9; ui.round.start = v === '9b' ? 10 : 1; render(); break;
       case 'r-player': { ui.round.course = $('#r-course').value; ui.round.date = $('#r-date').value; const id = Number(v), p = ui.round.players; ui.round.players = p.includes(id) ? p.filter((x) => x !== id) : [...p, id]; render(); break; }
       case 'r-start': { const n = ui.round; n.course = $('#r-course').value; n.date = $('#r-date').value; await startRound({ course: n.course, playedOn: laTime(n.date, '12:00'), holes: n.holes, startHole: n.start, players: n.players }); ui.round = null; break; }
@@ -1236,3 +1329,5 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (!S) render();
   syncPush();
 });
+// Keep the scorecard-photo row choices when the live refresh redraws the page.
+document.addEventListener('change', (e) => { const el = e.target.closest?.('[data-cr]'); const R = el && ui.cardRead?.[el.dataset.rid]; if (R) R.map[el.dataset.cr] = el.value ? Number(el.value) : null; });

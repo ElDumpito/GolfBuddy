@@ -370,4 +370,4 @@ function stateFor(me) {
   return { gear, clubs: clubs?.length ? clubs : DEFAULT_CLUBS, gearKinds: KINDS, brands: BRANDS.brands, support: Object.fromEntries(gear.map((g) => [g.id, supportFor(g.brand)])) };
 }
 
-module.exports = { handle, stateFor, measureHole, holesFromOsm, clubStats, supportFor, holeHistory, DEFAULT_CLUBS };
+module.exports = { handle, stateFor, measureHole, holesFromOsm, clubStats, supportFor, holeHistory, DEFAULT_CLUBS, KINDS };

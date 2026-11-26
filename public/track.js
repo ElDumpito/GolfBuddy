@@ -301,7 +301,7 @@ function viewGearForm(id) {
     body: `<section class="card" id="gf">
       <label style="margin-top:0">What is it</label><div class="chips">${S.gearKinds.map((k) => `<button class="chip ${f.kind === k ? 'on' : ''}" data-act="g-kind" data-v="${k}">${KIND_LABEL[k]}</button>`).join('')}</div>
       <label for="g-upc">Barcode (UPC)</label>
-      <div class="row"><input id="g-upc" class="grow" inputmode="numeric" value="${esc(f.upc)}" placeholder="Scan or type the number">${canScan ? `<button class="outline" data-act="g-scan">${icon('camera')}Scan</button>` : ''}<button class="outline" data-act="g-lookup">Look up</button></div>
+      <div class="row"><input id="g-upc" class="grow" inputmode="numeric" value="${esc(f.upc)}" placeholder="Scan or type the number">${canScan ? `<button class="outline" data-act="g-scan">${icon('camera')}Scan</button>` : ''}${S.features.vision ? `<button class="outline" data-act="g-photo">${icon('camera')}Photo</button>` : ''}<button class="outline" data-act="g-lookup">Look up</button></div>
       <div id="scanbox"></div>
       <label for="g-brand">Brand</label><input id="g-brand" list="brandlist" value="${esc(f.brand)}" autocomplete="off"><datalist id="brandlist">${S.brands.map((b) => `<option value="${esc(b)}">`).join('')}</datalist>
       <label for="g-model">Model</label><input id="g-model" list="modellist" value="${esc(f.model)}" autocomplete="off" placeholder="Pro V1, T200, Tour Edge Exotics…">
@@ -415,6 +415,17 @@ Object.assign(handlers, {
   't-del': async (el) => { if (!confirm('Remove this mark?')) return; await api('DELETE', `/api/shots/${el.dataset.id}`); T.data.shots = T.data.shots.filter((s) => s.id !== Number(el.dataset.id)); render(); },
   'save-clubs': async () => { const list = $('#clubs-list').value.split(/[\s,]+/).filter(Boolean); const r = await api('PUT', '/api/gear/clubs', { clubs: list }); S.clubs = r.clubs; toast('Clubs saved'); render(); },
   'g-kind': (el) => { readGearInputs(); gearForm.data.kind = el.dataset.v; render(); },
+  'g-photo': async () => {
+    readGearInputs();
+    try {
+      const read = await readPhoto('gear'); if (!read) return;
+      const f = gearForm.data;
+      f.kind = read.kind || f.kind;
+      f.brand = S.brands.find((b) => b.toLowerCase() === read.brand.toLowerCase()) || read.brand || f.brand;
+      f.model = read.model || f.model; f.detail = read.detail || f.detail;
+      render(); toast(read.brand || read.model ? 'Check it, then add it' : 'Couldn’t tell what that is. Type it in.');
+    } catch (e) { toast(e.message); }
+  },
   'g-scan': async () => { readGearInputs(); try { const code = await scanBarcode(); if (code) { gearForm.data.upc = code; await lookupUpc(); } else toast('No barcode seen'); } catch (e) { toast(e.name === 'NotAllowedError' ? 'Camera is blocked for this site' : e.message); } },
   'g-scan-stop': () => T.scanStop?.(),
   'g-lookup': async () => { try { await lookupUpc(); } catch (e) { toast(e.message); } },

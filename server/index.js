@@ -11,6 +11,7 @@ const svc = require('./services');
 const { brief, wakeOn } = require('./brief');
 const { wakeTick, e164, twilioReady, placeCall } = require('./wake');
 const track = require('./track');
+const vision = require('./vision');
 const rates = require('./rates');
 const { readEmail } = require('./mail');
 const { placeOf } = require('./brief');
@@ -445,7 +446,7 @@ function state(me) {
     invite: me.is_admin ? INVITE : undefined,
     // The browser key is meant to be public (it only works on this site); the server key never leaves the server.
     mapsKey: svc.key('google_browser_key') || null,
-    features: { google: !!svc.key('google_server_key'), calls: twilioReady() },
+    features: { google: !!svc.key('google_server_key'), calls: twilioReady(), vision: vision.ready() },
     wakeOn: Object.fromEntries(bookings.filter((b) => b.teeAt > Date.now() - 6 * HOUR).map((b) => [b.id, wakeOn(b)])),
     ...track.stateFor(me),
     // Published-rate price for each L.A. City tee time, so the app can show where a total comes from.
@@ -457,7 +458,7 @@ async function api(req, res, url, me) {
   const p = url.pathname, m = req.method;
   const seg = p.split('/').filter(Boolean); // ['api', thing, id, action]
   const id = Number(seg[2]);
-  const big = /^\/api\/shots\/\d+\/photo$/.test(p);
+  const big = /^\/api\/shots\/\d+\/photo$/.test(p) || p === '/api/read';
   const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, big ? 6e6 : 200000);
   const bad = (msg, code = 400) => send(res, code, { error: msg });
 
@@ -542,6 +543,25 @@ async function api(req, res, url, me) {
     return send(res, 200, { ok: true });
   }
 
+  // Read a photo (scorecard, receipt, gear, Player Card). Nothing is saved here: the app shows what was
+  // read and you confirm it. A daily cap per person keeps a stuck phone from running up the bill.
+  if (p === '/api/read' && m === 'POST') {
+    const kind = str(body.kind, 20);
+    const day = `read:${me.id}:${new Date().toISOString().slice(0, 10)}`;
+    const used = Number(db.cacheGet(day)?.v || 0);
+    if (used >= 40) return bad('That is 40 photos today. Try again tomorrow.', 429);
+    let hint = {};
+    if (kind === 'scorecard') {
+      const r = db.roundById(Number(body.roundId));
+      if (!r || !onRound(r, me.id)) return bad('That scorecard no longer exists', 404);
+      hint = { holes: r.holes, start: r.startHole, players: r.scores.map((x) => db.userById(x.userId)?.name).filter(Boolean) };
+    } else if (kind === 'receipt') hint = { categories: CATEGORIES.filter((c) => c !== 'Deposit') };
+    else if (kind === 'gear') hint = { kinds: track.KINDS };
+    try {
+      db.cacheSet(day, used + 1, Date.now() + 2 * 24 * HOUR);
+      return send(res, 200, { read: await vision.read(kind, body.image, hint) });
+    } catch (e) { return bad(e.message, e.status ? 502 : 400); }
+  }
   if (p === '/api/parse' && m === 'POST') return send(res, 200, readConfirmation(str(body.text, 100000)));
   if (seg[1] === 'admin' && seg[2] === 'inbound' && me.is_admin) {
     // Bookings by email: the key the Cloudflare email worker sends, and what has arrived lately.

@@ -99,3 +99,11 @@ Someone new can sign up from it without the invite code, but Cloudflare Access s
 (Zero Trust › Access › the GolfHomie app's policy). You only see your Homies, the tee times and rounds you're on, and
 money you're part of; who-owes-who is counted pair by pair. Everyone who used the app before Homies were linked once at upgrade.
 `public/vendor/qrcode.js` is qrcode-generator 2.0.4 (MIT, Kazuhiko Arase).
+
+## Camera reading
+
+Paper scorecards, receipts, clubs and balls, and the Player Card can be read from a photo. The photo is shrunk on the
+phone, sent to Anthropic's Claude (`claude-sonnet-5-5`, change with `ANTHROPIC_MODEL`) and what comes back is checked
+and shown to you to confirm. Nothing is saved until you tap to fill it in. It's off until an Anthropic API key is pasted in
+Me › Admin (console.anthropic.com › API keys; add a few dollars of credit and a monthly spend limit). Each person can read 40
+photos a day. The Player Card scan tries the card's barcode on the phone first, which is free and needs no key.

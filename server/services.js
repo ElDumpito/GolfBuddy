@@ -40,7 +40,7 @@ async function cached(key, ttl, fn) {
 }
 
 // ---- keys (pasted into the Me > Admin page, stored in settings) -----------
-const KEY_NAMES = ['google_server_key', 'google_browser_key', 'twilio_sid', 'twilio_token', 'twilio_from'];
+const KEY_NAMES = ['google_server_key', 'google_browser_key', 'twilio_sid', 'twilio_token', 'twilio_from', 'anthropic_key'];
 const key = (k) => db.getSetting(k) || process.env[k.toUpperCase()] || '';
 
 // ---- weather -----------------------------------------------------------------

@@ -823,6 +823,7 @@ function viewMe() {
       <div class="row" style="margin-top:16px"><span class="grow"><b>Wake-up calls</b><div class="tiny faint">A phone call 30 minutes before you need to leave, for tee times before 8 a.m. Switch it off per tee time any time.</div></span>
         <button class="switch ${me.wakeOk ? 'on' : ''}" data-act="me-wake" aria-label="Wake-up calls"></button></div>
       ${S.features.calls && me.phone ? `<button class="outline block" style="margin-top:10px" data-act="test-call">${icon('phone')} Call me now (test)</button>` : ''}
+      <label for="m-fwd">Gmail you forward confirmations from <span class="faint">(so emailed tee times are yours)</span></label><input id="m-fwd" type="email" value="${esc(me.fwd || '')}" placeholder="you@gmail.com" autocapitalize="off">
       <div class="over" style="margin:22px 0 2px">L.A. City Player Card</div>
       <div class="row" style="margin-top:10px"><span class="grow"><b>I have a Player Card</b><div class="tiny faint">Twilight rates start an hour earlier for you. Kept here for safe keeping; only you see the number.</div></span>
         <button class="switch ${me.card ? 'on' : ''}" data-act="me-card" aria-label="Has a Player Card"></button></div>
@@ -860,8 +861,19 @@ function viewAdmin() {
     ${row('twilio_token', 'Twilio Auth Token', '', 'password')}
     ${row('twilio_from', 'Twilio phone number', '+13105550123')}
     <div class="row" style="margin-top:14px"><button class="primary grow" data-act="save-keys">Save keys</button><button class="outline" data-act="test-google" ${S.features.google ? '' : 'disabled'}>Test Google</button></div>
+    ${inboundAdmin()}
     <label for="a-user" style="margin-top:22px">Reset someone's password</label><div class="row"><select id="a-user" class="grow">${S.users.filter((u) => u.id !== S.me.id).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
       <input id="a-pass" class="grow" placeholder="new password"><button class="outline" data-act="admin-pass">Set</button></div></section>`;
+}
+// Bookings by email: the worker key (copy it into the Cloudflare worker), Gmail's confirmation code, recent mail.
+function inboundAdmin() {
+  const I = ui.inbound;
+  if (!I) api('GET', '/api/admin/inbound').then((r) => { ui.inbound = r; render(); }).catch(() => {});
+  return `<div class="over" style="margin:22px 0 6px">Bookings by email</div>
+    <div class="small-text dim">Forward confirmations to <b>bookings@juno.nexus</b> and they become tee times. Setup steps are in the README.</div>
+    ${I ? `<div class="row" style="margin-top:8px"><button class="chip" data-act="copy" data-v="${esc(I.key)}">${icon('copy', 'sm')} Copy worker key</button><button class="chip" data-act="inbound-rotate">New key</button></div>
+    ${I.gmail?.code ? `<div class="note" style="margin-top:10px">Gmail forwarding code: <b class="num">${esc(I.gmail.code)}</b> <span class="tiny faint">(${fWhen(I.gmail.at)})</span></div>` : ''}
+    ${I.log?.length ? `<div class="list" style="margin-top:8px">${I.log.slice(0, 5).map((l) => `<div class="line tiny"><span class="grow">${esc(l.subject || '(no subject)')}</span><span class="faint">${esc(l.result)} · ${fDay(l.at)}</span></div>`).join('')}</div>` : '<div class="tiny faint" style="margin-top:6px">Nothing received yet.</div>'}` : ''}`;
 }
 function viewCourses() {
   return frame({
@@ -1066,10 +1078,11 @@ document.addEventListener('click', async (e) => {
       case 'del-round': if (confirm('Delete this scorecard?')) { await api('DELETE', `/api/rounds/${el.dataset.id}`); await refresh(false); go('#/scores'); } break;
       // me
       case 'me-wake': el.classList.toggle('on'); break;
+      case 'inbound-rotate': if (confirm('Make a new key? The Cloudflare worker stops working until you paste the new one into it.')) { ui.inbound = await api('POST', '/api/admin/inbound', { rotate: true }); render(); } break;
       case 'theme': S.me.theme = v; applyTheme(v); render(); api('POST', '/api/me/theme', { theme: v }).catch(() => {}); break;
       case 'save-me': {
         const wakeOk = $('[data-act="me-wake"]').classList.contains('on');
-        await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, hcp: $('#m-hcp').value.trim(), home: $('#m-home').value, phone: $('#m-phone').value,
+        await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, hcp: $('#m-hcp').value.trim(), fwd: $('#m-fwd').value.trim(), home: $('#m-home').value, phone: $('#m-phone').value,
           arriveMins: Number($('#m-arrive').value || 30), wakeOk, card: $('[data-act="me-card"]').classList.contains('on'), cardNo: $('#m-cardno').value, cardExp: $('#m-cardexp').value });
         ui.briefs = {}; await refresh(); toast('Saved'); break;
       }

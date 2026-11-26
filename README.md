@@ -77,3 +77,17 @@ the brand's support phone and site for warranty questions.
   or 20+ mph wind), one when it clears (under 25% and 15 mph). The cancellation-deadline and night-before reminders
   include the forecast.
 - **Call me now**: Me › Getting there, once Twilio is set up and your number is saved.
+
+## Bookings by email (Cloudflare Email Routing → Worker → GolfHomie)
+
+Forward a confirmation to `bookings@juno.nexus` and it becomes a tee time (a cancellation email cancels it).
+One-time setup:
+1. Cloudflare › juno.nexus › **Email › Email Routing** › Enable (it adds the MX/TXT records; juno.nexus had no mail before).
+2. **Workers & Pages** › Create Worker `golfhomie-mail`, paste `deploy/email-worker.js`, Deploy. Settings › Variables:
+   `GOLFHOMIE_URL` = `https://golf.juno.nexus`; Secret `INBOUND_KEY` = GolfHomie › Me › Admin › Bookings by email › Copy worker key.
+3. Email Routing › Routing rules › Create address `bookings` › action **Send to a Worker** › `golfhomie-mail`.
+4. Zero Trust › Access › Applications › Add self-hosted app `GolfHomie inbound`: domain `golf.juno.nexus`, path `api/inbound`,
+   policy **Bypass / Everyone**. (The key is what protects this path.)
+5. Gmail › Settings › Forwarding › Add `bookings@juno.nexus`. Gmail's code shows up in GolfHomie (push + Admin). Then a filter:
+   `from:(alerts@teetimeinfo.com OR golfnow.com OR foreup)` › Forward to `bookings@juno.nexus`.
+6. Each person puts the Gmail they forward from in Me, so their tee times are filed under them.

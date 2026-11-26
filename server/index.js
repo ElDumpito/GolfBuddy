@@ -12,6 +12,7 @@ const { brief, wakeOn } = require('./brief');
 const { wakeTick, e164, twilioReady, placeCall } = require('./wake');
 const track = require('./track');
 const rates = require('./rates');
+const { readEmail } = require('./mail');
 const { placeOf } = require('./brief');
 
 const PORT = Number(process.env.PORT || 8790);
@@ -24,6 +25,7 @@ const REMIND_HOURS = Number(process.env.REMIND_HOURS || 12);
 const VAPID = vapidKeys(db);
 const PUSH_SUBJECT = process.env.PUBLIC_URL && /^https:\/\//.test(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL : 'mailto:golfhomie@juno.nexus';
 
+if (!db.getSetting('inbound_key')) db.setSetting('inbound_key', crypto.randomBytes(24).toString('hex'));
 let INVITE = process.env.INVITE_CODE && process.env.INVITE_CODE !== 'change-me' ? process.env.INVITE_CODE : db.getSetting('invite');
 if (!INVITE) { INVITE = crypto.randomBytes(4).toString('hex'); db.setSetting('invite', INVITE); }
 if (!db.userCount()) console.log(`\n  No accounts yet. Register with invite code: ${INVITE}\n  The first account created becomes the admin.\n`);
@@ -346,6 +348,63 @@ function coursePars(courseId, holes, startHole) {
 }
 function okStrokes(a, holes) { return Array.isArray(a) && a.length <= holes && a.every((x) => x == null || (Number.isInteger(x) && x >= 1 && x <= 20)); }
 
+// ---- confirmations (pasted, shared or emailed) ------------------------------------
+function readConfirmation(text) {
+  const r = parseConfirmation(text, db.courses());
+  if (r.course) {
+    const c = db.courseByName(r.course) || db.courseByName(r.course.replace(/\s*\(.*\)\s*$/, ''));
+    if (c) { r.address = r.address || c.address; if (r.cancelHours == null) r.cancelHours = c.cancelHours; }
+  }
+  if (r.booker) {
+    const first = r.booker.toLowerCase().split(/\s+/)[0];
+    const u = db.users().find((x) => x.name.toLowerCase() === r.booker.toLowerCase() || x.name.toLowerCase().split(/\s+/)[0] === first || x.username.toLowerCase() === first);
+    if (u) r.bookerId = u.id;
+  }
+  return r;
+}
+function inboundLog(entry) {
+  const log = JSON.parse(db.getSetting('inbound_log') || '[]');
+  log.unshift({ at: Date.now(), ...entry });
+  db.setSetting('inbound_log', JSON.stringify(log.slice(0, 15)));
+}
+// An email forwarded to GolfHomie: a confirmation becomes a tee time, a cancellation cancels one,
+// and Gmail's "confirm forwarding" email is shown to the admin so the code can be typed into Gmail.
+async function inbound(payload) {
+  const mail = readEmail(String(payload.raw || ''));
+  const envelope = String(payload.from || '').toLowerCase();
+  const users = db.allUsersRaw();
+  const sender = users.find((u) => String(u.fwd || '').toLowerCase().split(/[\s,;]+/).filter(Boolean).includes(envelope)) || users.find((u) => u.is_admin) || users[0];
+  if (!sender) return { result: 'no accounts yet' };
+  if (/forwarding confirmation|confirm.*forward/i.test(mail.subject) || /forwarding-noreply@google\.com/i.test(mail.from)) {
+    const code = mail.text.match(/Confirmation code:\s*(\d+)/i)?.[1] || mail.subject.match(/#(\d+)/)?.[1] || null;
+    const link = mail.text.match(/https:\/\/mail[^\s]*google\.com\/mail\/[^\s]+/i)?.[0] || null;
+    db.setSetting('gmail_confirm', JSON.stringify({ at: Date.now(), code, link, for: mail.subject }));
+    await notify(users.filter((u) => u.is_admin).map((u) => u.id), { title: '📬 Gmail forwarding code', body: code ? `Code ${code}: type it into Gmail's forwarding settings.` : 'Open Me › Admin to finish.', url: '/#/me', tag: 'gmail' });
+    return { result: 'gmail confirmation', code };
+  }
+  const r = readConfirmation(`${mail.subject}\n${mail.text}`);
+  const same = (b) => (r.confirmation && b.confirmation === r.confirmation) || (r.course && r.teeAt && b.teeAt === r.teeAt && b.course.toLowerCase() === r.course.toLowerCase());
+  const existing = db.bookings(Date.now() - 2 * 24 * HOUR).find(same);
+  if (/cancel/i.test(mail.subject) || /has been cancel+ed|cancellation confirm/i.test(mail.text.slice(0, 600))) {
+    if (!existing) return { result: 'cancellation for a tee time not in the app' };
+    if (existing.status !== 'cancelled') {
+      db.setBookingStatus(existing.id, 'cancelled'); syncBalance(existing.id);
+      await notify(existing.roster.map((x) => x.userId), { title: `🚫 Cancelled: ${existing.course}`, body: `${fmtWhen(existing.teeAt)}. From a cancellation email.`, url: bookingUrl(existing.id), tag: `b${existing.id}` });
+    }
+    return { result: 'cancelled', bookingId: existing.id };
+  }
+  if (!r.course || !r.teeAt) {
+    await notify([sender.id], { title: '📬 Couldn’t read that email', body: `“${mail.subject.slice(0, 80)}” didn’t look like a tee time. Paste it in the app instead.`, url: '/#/new', tag: 'inbound' });
+    return { result: 'not a tee time', missing: r.missing };
+  }
+  if (existing) return { result: 'already in the app', bookingId: existing.id };
+  const out = createBooking({ course: r.course, teeAt: r.teeAt, players: r.players || 2, holes: r.holes || 18, bookerId: r.bookerId || sender.id, total: r.total != null ? r.total / 100 : '',
+    deposit: r.deposit != null ? r.deposit / 100 : '', cancelHours: r.cancelHours ?? 24, confirmation: r.confirmation || '', address: r.address || '', notes: r.notes || '', source: `Email · ${r.source || 'confirmation'}` }, sender);
+  if (out.err) return { result: `not added: ${out.err}` };
+  await notify([sender.id], { title: `📬 Added from email: ${out.booking.course}`, body: `${bookingLine(out.booking)}. Check it over in the app.`, url: bookingUrl(out.booking.id), tag: `b${out.booking.id}` });
+  return { result: 'added', bookingId: out.booking.id };
+}
+
 // ---- the API ------------------------------------------------------------------
 function state(me) {
   const balances = db.balances();
@@ -410,6 +469,12 @@ async function api(req, res, url, me) {
       if (wakeOk && (!phone || homeLat == null)) return bad('Wake-up calls need your phone number and home address');
       db.setTravel(me.id, { phone, home, homeLat, homeLon, arriveMins, wakeOk, tee: str(body.tee, 30) });
     }
+    if ('fwd' in body) {
+      // The Gmail address(es) this person forwards confirmations from, so emailed tee times are theirs.
+      const fwd = str(body.fwd, 200).toLowerCase();
+      if (fwd && !fwd.split(/[\s,;]+/).filter(Boolean).every((e) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(e))) return bad('Forwarding address: an email address, or several separated by commas');
+      db.raw.prepare('UPDATE users SET fwd=? WHERE id=?').run(fwd || null, me.id);
+    }
     if ('hcp' in body) {
       // Handicap Index, for the GHIN posting screen. Blank = none yet. Plus handicaps are entered as negatives.
       const h = body.hcp === '' || body.hcp == null ? null : Number(String(body.hcp).replace('+', '-'));
@@ -431,18 +496,11 @@ async function api(req, res, url, me) {
     return send(res, 200, { ok: true });
   }
 
-  if (p === '/api/parse' && m === 'POST') {
-    const r = parseConfirmation(str(body.text, 100000), db.courses());
-    if (r.course) {
-      const c = db.courseByName(r.course) || db.courseByName(r.course.replace(/\s*\(.*\)\s*$/, ''));
-      if (c) { r.address = r.address || c.address; if (r.cancelHours == null) r.cancelHours = c.cancelHours; }
-    }
-    if (r.booker) {
-      const first = r.booker.toLowerCase().split(/\s+/)[0];
-      const u = db.users().find((x) => x.name.toLowerCase() === r.booker.toLowerCase() || x.name.toLowerCase().split(/\s+/)[0] === first || x.username.toLowerCase() === first);
-      if (u) r.bookerId = u.id;
-    }
-    return send(res, 200, r);
+  if (p === '/api/parse' && m === 'POST') return send(res, 200, readConfirmation(str(body.text, 100000)));
+  if (seg[1] === 'admin' && seg[2] === 'inbound' && me.is_admin) {
+    // Bookings by email: the key the Cloudflare email worker sends, and what has arrived lately.
+    if (m === 'POST' && body.rotate) db.setSetting('inbound_key', crypto.randomBytes(24).toString('hex'));
+    return send(res, 200, { key: db.getSetting('inbound_key'), log: JSON.parse(db.getSetting('inbound_log') || '[]'), gmail: JSON.parse(db.getSetting('gmail_confirm') || 'null') });
   }
 
   if (seg[1] === 'bookings') {
@@ -709,6 +767,18 @@ async function handle(req, res) {
         const u = db.userByName(str(b.username, 24));
         if (!u || !db.checkPassword(String(b.password || ''), u.pass)) return send(res, 401, { error: 'Wrong username or password' });
         return send(res, 200, { me: db.pubUser(u) }, { 'Set-Cookie': sessionCookie(req, db.createSession(u.id)) });
+      }
+      if (p === '/api/inbound' && req.method === 'POST') {
+        // From the Cloudflare email worker. Not behind a login (the worker can't sign in), so it
+        // needs the shared key, compared in constant time.
+        const key = db.getSetting('inbound_key') || '';
+        const got = Buffer.from(String(req.headers['x-inbound-key'] || ''));
+        if (!key || got.length !== key.length || !crypto.timingSafeEqual(got, Buffer.from(key))) return send(res, 403, { error: 'Wrong key' });
+        if (limited(req, 60, HOUR)) return send(res, 429, { error: 'Too many' });
+        const payload = await readJson(req, 3e6);
+        const out = await inbound(payload);
+        inboundLog({ subject: readEmail(String(payload.raw || '')).subject.slice(0, 100), ...out });
+        return send(res, 200, out);
       }
       if (p === '/api/logout' && req.method === 'POST') {
         db.dropSession(cookies(req).sid);

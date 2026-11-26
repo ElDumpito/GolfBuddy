@@ -57,7 +57,7 @@ addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], 
   // L.A. City Player Card: whether they have one (it moves twilight pricing an hour earlier), and the
   // card number and renewal date kept for safe keeping (only shown to the card's owner).
   ['card', 'INTEGER DEFAULT 1'], ['card_no', 'TEXT'], ['card_exp', 'TEXT'], ['card_reminded', 'TEXT'],
-  ['theme', 'TEXT'], ['hcp', 'REAL']]);
+  ['theme', 'TEXT'], ['hcp', 'REAL'], ['fwd', 'TEXT']]);
 // wake: NULL = automatic (on for tee times before 8 a.m.), 0 = off, 1 = on. wake_log: what the caller did, per person.
 addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT'], ['tee_nudged', 'INTEGER DEFAULT 0'],
   // ride: walk | push | cart. price_auto: the total comes from the course's published rates.
@@ -109,7 +109,7 @@ function checkPassword(pw, stored) {
 const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin, tee: u.tee || '', card: u.card !== 0 };
 // The private part of a profile: only ever sent to that person.
 const ownProfile = (u) => u && ({ ...pubUser(u), phone: u.phone || '', home: u.home || '', homeSet: u.home_lat != null, arriveMins: u.arrive_mins ?? 30, wakeOk: !!u.wake_ok,
-  cardNo: u.card_no || '', cardExp: u.card_exp || '', theme: u.theme || 'augusta', hcp: u.hcp ?? null });
+  cardNo: u.card_no || '', cardExp: u.card_exp || '', theme: u.theme || 'augusta', hcp: u.hcp ?? null, fwd: u.fwd || '' });
 const bookingRow = (b) => b && ({
   id: b.id, courseId: b.course_id, course: b.course, address: b.address || '', teeAt: b.tee_at, players: b.players, holes: b.holes,
   bookerId: b.booker_id, confirmation: b.confirmation || '', total: b.total, deposit: b.deposit, cancelAt: b.cancel_at,

@@ -83,7 +83,7 @@ const take = (uid) => { const m = inbox[uid] || []; inbox[uid] = []; return m; }
 
   // CK says he's out; Mike hears about it
   await call('ck', 'POST', `/api/bookings/${bid}/rsvp`, { rsvp: 'out' }); await wait(150);
-  m = take(mike.id); assert.strictEqual(m.length, 1); assert.ok(m[0].title.includes("can't make it"));
+  m = take(mike.id); assert.strictEqual(m.length, 1); assert.ok(m[0].title.includes('is out'));
   await call('ck', 'POST', `/api/bookings/${bid}/rsvp`, { rsvp: 'in' }); await wait(150); take(mike.id);
 
   // food at the turn, paid by CK, split evenly

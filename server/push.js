@@ -54,7 +54,7 @@ function encrypt(payload, p256dh, auth) {
 
 // Send to one subscription. Resolves to 'ok', 'gone' (the browser unsubscribed; forget it) or
 // throws on any other failure.
-async function sendPush(sub, message, keys, subject = 'mailto:golfbuddy@localhost') {
+async function sendPush(sub, message, keys, subject = 'mailto:golfhomie@localhost') {
   const res = await fetch(sub.endpoint, {
     method: 'POST',
     headers: {

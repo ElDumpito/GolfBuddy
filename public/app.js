@@ -1,5 +1,5 @@
 'use strict';
-// GolfBuddy client. One page; the part after # in the address picks the screen.
+// GolfHomie client. One page; the part after # in the address picks the screen.
 // Shot tracking and the gear closet live in track.js, which plugs into the same render loop.
 const TZ = 'America/Los_Angeles';
 const HOUR = 3600000, MIN = 60000;
@@ -119,7 +119,7 @@ const teeDot = (name) => { const k = String(name).toLowerCase().split('/')[0].tr
 function frame({ title, back, right = '', body, tab, wordmark }) {
   const tabs = [['tee', '#/', 'flag', 'Tee times'], ['money', '#/money', 'wallet', 'Money'], ['scores', '#/scores', 'card', 'Rounds'], ['me', '#/me', 'user', 'Me']];
   return `<header class="top">${back ? `<a class="btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
-    ${wordmark ? `<span class="wordmark grow">Golf<b>Buddy</b></span>` : `<h1 class="grow">${esc(title)}</h1>`}${right}</header>
+    ${wordmark ? `<span class="wordmark grow">Golf<b>Homie</b></span>` : `<h1 class="grow">${esc(title)}</h1>`}${right}</header>
   <main class="page">${body}</main>
   <nav class="nav">${tabs.map(([k, h, i, l]) => `<a href="${h}" class="${tab === k ? 'on' : ''}">${icon(i)}${l}</a>`).join('')}</nav>`;
 }
@@ -186,16 +186,16 @@ function viewTeeTimes() {
   return frame({
     wordmark: true, tab: 'tee', right: balanceChip(),
     body: `${pushHint}
-    ${next ? `<a class="card hero" href="#/b/${next.id}" style="color:inherit">
-      <div class="row"><span class="over grow">Next round · ${esc(until(next.teeAt))}</span>${deadlinePill(next)}</div>
+    ${next ? `<a class="card hero" href="#/b/${next.id}">
+      <div class="row"><span class="over grow">Next up · ${esc(until(next.teeAt))}</span>${deadlinePill(next)}</div>
       <div class="course">${esc(next.course)}</div>
       <div class="when">${fLongDay(next.teeAt)} at ${fTime(next.teeAt)}</div>
       ${glance(next, br)}</a>`
-      : `<section class="card hero"><div class="over">No round on the books</div><div class="course">Where to next?</div><div class="when">Paste a confirmation email and the rest fills itself in.</div></section>`}
+      : `<section class="card hero"><div class="over">Nothing on the books</div><div class="course">Where to next?</div><div class="when">Paste or forward a confirmation and the rest fills itself in.</div></section>`}
     <a class="btn primary block" href="#/new">${icon('plus')} Add a tee time</a>
-    ${up.length > 1 ? `<section class="card"><div class="card-head"><h2>Also coming up</h2></div><div class="list">${up.slice(1).map(teeRow).join('')}</div></section>` : ''}
+    ${up.length > 1 ? `<section class="card"><div class="card-head"><h2>On deck</h2></div><div class="list">${up.slice(1).map(teeRow).join('')}</div></section>` : ''}
     <section class="card flush list">
-      <a class="link-row" href="#/practice"><span class="ic">${icon('target')}</span><span class="grow"><b>Ranges &amp; simulators</b><div class="small-text dim">Within 30 miles of you</div></span><span class="faint">${icon('chev')}</span></a>
+      <a class="link-row" href="#/practice"><span class="ic">${icon('target')}</span><span class="grow"><b>Ranges &amp; simulators</b><div class="small-text dim">Get some reps in, within 30 miles</div></span><span class="faint">${icon('chev')}</span></a>
       <a class="link-row" href="#/bag"><span class="ic">${icon('bag')}</span><span class="grow"><b>Your bag</b><div class="small-text dim">Clubs, balls, gloves and shoes</div></span><span class="faint">${icon('chev')}</span></a>
     </section>
     ${past.length ? `<section class="card"><div class="card-head"><h2>Past &amp; cancelled</h2><button class="quiet chip" data-act="toggle-past">${ui.showPast ? 'Hide' : `Show ${past.length}`}</button></div>
@@ -309,8 +309,8 @@ function viewBooking(id) {
       ${website ? `<a class="btn" href="${esc(website)}" target="_blank" rel="noopener">${icon('globe')}Website</a>` : `<button disabled>${icon('globe')}Website</button>`}
       <a class="btn" href="${gcalUrl(b)}" target="_blank" rel="noopener">${icon('cal')}Calendar</a>
     </section>
-    ${!cancelled && b.teeAt > Date.now() ? `<section class="card"><div class="row"><span class="grow"><b>Are you playing?</b></span></div>
-      <div class="seg" style="margin-top:10px"><button data-act="rsvp" data-v="in" class="${mine && mine.rsvp !== 'out' ? 'on' : ''}">I'm in</button><button data-act="rsvp" data-v="out" class="${mine?.rsvp === 'out' ? 'on' : ''}">Can't make it</button></div>
+    ${!cancelled && b.teeAt > Date.now() ? `<section class="card"><div class="row"><span class="grow"><b>You in?</b></span></div>
+      <div class="seg" style="margin-top:10px"><button data-act="rsvp" data-v="in" class="${mine && mine.rsvp !== 'out' ? 'on' : ''}">I'm in</button><button data-act="rsvp" data-v="out" class="${mine?.rsvp === 'out' ? 'on' : ''}">I'm out</button></div>
       <div class="who" style="margin-top:10px">${rosterChips(b)}</div></section>` : ''}
     ${upcoming ? `<section class="card"><div class="card-head"><h2>Round brief</h2>${br ? `<button class="quiet chip" data-act="brief-refresh" data-id="${b.id}" aria-label="Refresh">↻</button>` : ''}</div>
       <div class="brief-sec">${briefWeather(b, br?.weather)}</div>
@@ -409,7 +409,7 @@ function viewForm(id) {
     body: `${editing ? '' : `<section class="card"><h2>Paste the confirmation</h2>
       <textarea id="paste" placeholder="Paste the confirmation email (L.A. City, GolfNow, foreUP or anything else) and tap Read it.">${esc(f.paste)}</textarea>
       <div class="row" style="margin-top:10px"><button class="primary" data-act="read-paste">Read it</button><button class="outline" data-act="paste-clip">Paste from clipboard</button></div>
-      <p class="tiny faint" style="margin:10px 0 0">Tip: in Gmail, long-press the email text › Select all › Share › GolfBuddy.</p></section>`}
+      <p class="tiny faint" style="margin:10px 0 0">Tip: in Gmail, long-press the email text › Select all › Share › GolfHomie.</p></section>`}
     <section class="card" id="bf">
       <label for="f-course" style="margin-top:0">Course</label><input id="f-course" list="courses" value="${esc(f.course)}" placeholder="Rancho Park" autocomplete="off">
       <datalist id="courses">${S.courses.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>
@@ -529,7 +529,7 @@ function settlementLine(s) {
 }
 function transferRow(t) {
   const iPay = t.fromId === S.me.id, iGet = t.toId === S.me.id;
-  const note = '⛳ GolfBuddy settle-up';
+  const note = '⛳ GolfHomie settle-up';
   let buttons = '';
   if (iPay) {
     const v = user(t.toId).venmo;
@@ -549,7 +549,7 @@ function viewMoney() {
   const p = ui.pendingPay;
   return frame({
     title: 'Money', tab: 'money',
-    body: `${p ? `<section class="card"><b>Did the Venmo payment go through?</b><div class="small-text dim">${money(p.amount)} to ${esc(user(p.toId).name)}. GolfBuddy can't see Venmo, so tell it.</div>
+    body: `${p ? `<section class="card"><b>Did the Venmo payment go through?</b><div class="small-text dim">${money(p.amount)} to ${esc(user(p.toId).name)}. GolfHomie can't see Venmo, so tell it.</div>
       <div class="row" style="margin-top:12px"><button class="primary" data-act="pending-yes">Yes, mark paid</button><button class="outline" data-act="pending-no">Not yet</button></div></section>` : ''}
     <section class="card"><div class="over">Where you stand</div>
       <div class="balance num ${b > 0 ? 'pos' : b < 0 ? 'neg' : ''}" style="margin:6px 0 4px">${b > 0 ? `You're owed ${money(b)}` : b < 0 ? `You owe ${money(-b)}` : 'All square'}</div>
@@ -699,6 +699,16 @@ function saveRoundSoon(r, payload) {
   }, 500);
 }
 
+// ---------- looks ----------
+const THEMES = [['augusta', 'Augusta', '#0b100e'], ['ivory', 'Ivory', '#f3eee2'], ['onyx', 'Onyx', '#0b0b0c']];
+function applyTheme(t) {
+  const th = THEMES.find((x) => x[0] === t) || THEMES[0];
+  if (th[0] === 'augusta') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = th[0];
+  $('meta[name="theme-color"]')?.setAttribute('content', th[2]);
+  try { localStorage.setItem('theme', th[0]); } catch { /* private mode */ }
+}
+const themePicker = () => `<section class="card"><h2>Look</h2><div class="swatches">${THEMES.map(([k, l]) => `<button class="swatch ${(S.me.theme || 'augusta') === k ? 'on' : ''}" data-act="theme" data-v="${k}"><i class="sw-${k}"></i><span>${l}</span></button>`).join('')}</div></section>`;
+
 // ---------- me ----------
 function viewMe() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
@@ -706,7 +716,7 @@ function viewMe() {
   const teeNames = [...new Set(S.courses.flatMap((c) => c.info?.tees?.map((t) => t.name.split('/')[0]) || []))];
   return frame({
     title: 'Me', tab: 'me',
-    body: `<section class="card" id="mf"><h2>Profile</h2>
+    body: `${themePicker()}<section class="card" id="mf"><h2>Profile</h2>
       <label for="m-name">Name</label><input id="m-name" value="${esc(me.name)}">
       <label for="m-venmo">Venmo username</label><input id="m-venmo" value="${esc(me.venmo)}" placeholder="without the @" autocapitalize="off">
       <label for="m-tee">Tees you usually play</label><select id="m-tee"><option value="">No preference</option>${teeNames.map((t) => `<option ${t === me.tee ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
@@ -732,7 +742,7 @@ function viewMe() {
       <a class="link-row" href="#/bag"><span class="ic">${icon('bag')}</span><span class="grow"><b>Your bag</b><div class="small-text dim">Clubs, balls, gloves, shoes and where to get support</div></span><span class="faint">${icon('chev')}</span></a>
       <a class="link-row" href="#/courses"><span class="ic">${icon('flag')}</span><span class="grow"><b>Courses</b><div class="small-text dim">${S.courses.length} on file</div></span><span class="faint">${icon('chev')}</span></a>
     </section>
-    <section class="card"><h2>App</h2>${installEvt ? `<button class="block" data-act="install">Install GolfBuddy</button>` : `<p class="small-text dim" style="margin:0">To install: Chrome menu ⋮ › Add to Home screen. Once installed, GolfBuddy shows up in Android's Share menu, so you can share a confirmation email straight into it.</p>`}</section>
+    <section class="card"><h2>App</h2>${installEvt ? `<button class="block" data-act="install">Install GolfHomie</button>` : `<p class="small-text dim" style="margin:0">To install: Chrome menu ⋮ › Add to Home screen. Once installed, GolfHomie shows up in Android's Share menu, so you can share a confirmation email straight into it.</p>`}</section>
     ${me.admin ? viewAdmin() : ''}
     <section class="card"><h2>Password</h2><div class="grid2"><input id="p-old" type="password" placeholder="current"><input id="p-new" type="password" placeholder="new (6+)"></div>
       <button class="block outline" style="margin-top:10px" data-act="change-pass">Change password</button></section>
@@ -787,7 +797,7 @@ function viewCourse(id) {
 // ---------- login ----------
 function viewAuth() {
   const reg = ui.authMode === 'register';
-  return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1>Golf<i class="brass">Buddy</i></h1>
+  return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1>Golf<i class="brass">Homie</i></h1>
     <div class="seg" style="margin:18px 0 4px"><button data-act="auth-mode" data-v="login" class="${reg ? '' : 'on'}">Log in</button><button data-act="auth-mode" data-v="register" class="${reg ? 'on' : ''}">Create account</button></div>
     <form id="authf"><label for="u">Username</label><input id="u" autocomplete="username" autocapitalize="off" required>
     ${reg ? '<label for="n">Your name</label><input id="n" placeholder="Mike">' : ''}
@@ -829,6 +839,7 @@ async function refresh(draw = true) {
     if (res.status === 401) { S = null; render(); return; }
     if (!res.ok) return;
     S = await res.json();
+    applyTheme(S.me.theme);
     if (draw && !busyForm()) render();
   } catch { /* offline: keep what we have */ }
 }
@@ -879,7 +890,7 @@ document.addEventListener('click', async (e) => {
       case 'install': if (installEvt) { installEvt.prompt(); installEvt = null; } break;
       case 'copy': await navigator.clipboard.writeText(v); toast('Copied'); break;
       // tee times
-      case 'rsvp': await api('POST', `/api/bookings/${seg[1]}/rsvp`, { rsvp: v }); delete ui.briefs[seg[1]]; await refresh(); toast(v === 'in' ? "You're in" : 'Marked you out. Your buddy was told.'); break;
+      case 'rsvp': await api('POST', `/api/bookings/${seg[1]}/rsvp`, { rsvp: v }); delete ui.briefs[seg[1]]; await refresh(); toast(v === 'in' ? "You're in" : "You're out. Your homies know."); break;
       case 'brief-refresh': delete ui.briefs[el.dataset.id]; render(); break;
       case 'wake-toggle': case 'wake-auto': {
         const body = act === 'wake-auto' ? { wake: null } : { wake: v === '1' };
@@ -957,6 +968,7 @@ document.addEventListener('click', async (e) => {
       case 'del-round': if (confirm('Delete this scorecard?')) { await api('DELETE', `/api/rounds/${el.dataset.id}`); await refresh(false); go('#/scores'); } break;
       // me
       case 'me-wake': el.classList.toggle('on'); break;
+      case 'theme': S.me.theme = v; applyTheme(v); render(); api('POST', '/api/me/theme', { theme: v }).catch(() => {}); break;
       case 'save-me': {
         const wakeOk = $('[data-act="me-wake"]').classList.contains('on');
         await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, home: $('#m-home').value, phone: $('#m-phone').value,

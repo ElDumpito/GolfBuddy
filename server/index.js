@@ -1,5 +1,5 @@
 'use strict';
-// GolfBuddy: shared tee times, who-owes-who, scorecards. Plain Node HTTP server, no packages.
+// GolfHomie: shared tee times, who-owes-who, scorecards. Plain Node HTTP server, no packages.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -22,7 +22,7 @@ const HOUR = 3600000;
 // How long before the free-cancellation deadline the "still in?" reminder goes out.
 const REMIND_HOURS = Number(process.env.REMIND_HOURS || 12);
 const VAPID = vapidKeys(db);
-const PUSH_SUBJECT = process.env.PUBLIC_URL && /^https:\/\//.test(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL : 'mailto:golfbuddy@juno.nexus';
+const PUSH_SUBJECT = process.env.PUBLIC_URL && /^https:\/\//.test(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL : 'mailto:golfhomie@juno.nexus';
 
 let INVITE = process.env.INVITE_CODE && process.env.INVITE_CODE !== 'change-me' ? process.env.INVITE_CODE : db.getSetting('invite');
 if (!INVITE) { INVITE = crypto.randomBytes(4).toString('hex'); db.setSetting('invite', INVITE); }
@@ -94,7 +94,7 @@ async function notify(ids, msg) {
 }
 const others = (me, ids = userIds()) => ids.filter((id) => id !== me);
 const bookingUrl = (id) => `/#/b/${id}`;
-const RSVP_ACTIONS = [{ action: 'in', title: "✅ I'm in" }, { action: 'out', title: "❌ Can't make it" }];
+const RSVP_ACTIONS = [{ action: 'in', title: "✅ I'm in" }, { action: 'out', title: "❌ I'm out" }];
 
 // ---- bookings ---------------------------------------------------------------
 function cancelReminderAt(b) { return b.cancelAt - REMIND_HOURS * HOUR; }
@@ -374,6 +374,10 @@ async function api(req, res, url, me) {
     if (done !== false) return;
   }
 
+  if (p === '/api/me/theme' && m === 'POST') {
+    if (!['augusta', 'ivory', 'onyx'].includes(body.theme)) return bad('Augusta, Ivory or Onyx?');
+    db.setTheme(me.id, body.theme); return send(res, 200, { ok: true });
+  }
   if (p === '/api/me' && m === 'POST') {
     const name = str(body.name, 30) || me.username;
     const venmo = str(body.venmo, 40).replace(/^@/, '');
@@ -466,7 +470,7 @@ async function api(req, res, url, me) {
       const prev = b.roster.find((r) => r.userId === me.id)?.rsvp;
       db.setRsvp(id, me.id, rsvp);
       if (prev !== rsvp) {
-        notify(others(me.id, b.roster.map((r) => r.userId)), { title: rsvp === 'in' ? `✅ ${firstName(me.id)} is in` : `❌ ${firstName(me.id)} can't make it`,
+        notify(others(me.id, b.roster.map((r) => r.userId)), { title: rsvp === 'in' ? `✅ ${firstName(me.id)} is in` : `❌ ${firstName(me.id)} is out`,
           body: `${b.course} · ${fmtWhen(b.teeAt)}${rsvp === 'out' && Date.now() < b.cancelAt ? `\nFree cancel until ${fmtWhen(b.cancelAt)}` : ''}`, url: bookingUrl(id), tag: `b${id}` });
       }
       return send(res, 200, { booking: db.bookingById(id) });
@@ -606,7 +610,7 @@ async function api(req, res, url, me) {
     }
     if (seg[2] === 'unsubscribe' && m === 'POST') { if (body.endpoint) db.dropSub(String(body.endpoint)); return send(res, 200, { ok: true }); }
     if (seg[2] === 'test' && m === 'POST') {
-      const n = await notify([me.id], { title: '⛳ GolfBuddy notifications work', body: "You'll get new tee times, cancellation reminders and ledger updates here.", url: '/' });
+      const n = await notify([me.id], { title: '⛳ GolfHomie notifications work', body: "You'll get new tee times, cancellation reminders and ledger updates here.", url: '/' });
       return send(res, 200, { sent: n });
     }
   }
@@ -627,7 +631,7 @@ async function api(req, res, url, me) {
     if (!to) return bad('Add your mobile number in Me first');
     if (limited({ headers: { 'cf-connecting-ip': `call:${me.id}` }, socket: {} }, 3, HOUR)) return bad('That’s 3 test calls this hour. Try again later.', 429);
     try {
-      const sid = await placeCall(to, `<Response><Pause length="1"/><Say voice="Polly.Joanna">Hi ${String(firstName(me.id)).replace(/[<>&'"]/g, '')}. This is a GolfBuddy test call. Your wake-up calls are working. Goodbye.</Say></Response>`);
+      const sid = await placeCall(to, `<Response><Pause length="1"/><Say voice="Polly.Joanna">Hi ${String(firstName(me.id)).replace(/[<>&'"]/g, '')}. This is a GolfHomie test call. Your wake-up calls are working. Goodbye.</Say></Response>`);
       return send(res, 200, { ok: true, sid });
     } catch (e) { return bad(e.message, 502); }
   }
@@ -717,7 +721,7 @@ async function handle(req, res) {
 
 const server = http.createServer((req, res) => handle(req, res).catch((e) => { console.error(e); try { send(res, 500, { error: 'Server error' }); } catch { /* already sent */ } }));
 if (require.main === module) {
-  server.listen(PORT, () => console.log(`GolfBuddy on http://localhost:${PORT}`));
+  server.listen(PORT, () => console.log(`GolfHomie on http://localhost:${PORT}`));
   setInterval(() => reminderTick().catch((e) => console.error('reminders:', e)), 60000);
   setInterval(() => wakeTick(Date.now(), { notify }).catch((e) => console.error('wake-up calls:', e)), 60000);
   setInterval(() => db.cachePrune(), 6 * HOUR);

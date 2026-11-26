@@ -4,7 +4,7 @@
 // leave home, worked out from the drive in expected traffic. They also get a push notification,
 // so the feature still works (quietly) before the phone service is set up.
 //
-// Phone calls go through Twilio. GolfBuddy never needs Twilio to reach it (the site is behind a
+// Phone calls go through Twilio. GolfHomie never needs Twilio to reach it (the site is behind a
 // login wall): it starts the call with the spoken message attached, then asks Twilio how it went.
 const db = require('./db');
 const svc = require('./services');
@@ -31,7 +31,7 @@ function e164(phone) {
 function script(name, b, leave) {
   const first = String(name || '').split(/\s+/)[0] || 'there';
   const drive = leave.estimate ? 'I could not check traffic, so this assumes about an hour on the road.' : `The drive is about ${leave.minutes} minutes in expected traffic.`;
-  const line = `Good morning ${first}. This is your GolfBuddy wake-up call for your ${fmt(b.teeAt)} tee time at ${b.course}. Leave by ${fmt(leave.at)}. ${drive}`;
+  const line = `Good morning ${first}. This is your GolfHomie wake-up call for your ${fmt(b.teeAt)} tee time at ${b.course}. Leave by ${fmt(leave.at)}. ${drive}`;
   return `<Response><Pause length="1"/><Say voice="Polly.Joanna">${xml(line)}</Say><Pause length="1"/><Say voice="Polly.Joanna">${xml(`Again: leave by ${fmt(leave.at)}. Have a great round.`)}</Say></Response>`;
 }
 

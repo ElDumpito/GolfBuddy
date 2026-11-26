@@ -1,5 +1,5 @@
 'use strict';
-// Everything GolfBuddy looks up on the internet, each answer cached in the database so a page view
+// Everything GolfHomie looks up on the internet, each answer cached in the database so a page view
 // never waits on (or pays for) the same question twice.
 //   - Weather: National Weather Service (free, no key).
 //   - Addresses to coordinates: US Census geocoder (free, no key); Google Places when a key is set.
@@ -8,7 +8,7 @@
 const db = require('./db');
 const { miles } = require('./geo');
 
-const UA = `GolfBuddy (${process.env.PUBLIC_URL || 'golf.juno.nexus'})`;
+const UA = `GolfHomie (${process.env.PUBLIC_URL || 'golf.juno.nexus'})`;
 const MIN = 60000, HOUR = 3600000;
 
 // Every outside call goes through here: a timeout, and errors as exceptions with the service name.

@@ -1,12 +1,12 @@
-// GolfBuddy service worker: shows push notifications and handles taps on them.
+// GolfHomie service worker: shows push notifications and handles taps on them.
 // It does not cache pages, so the app is always the latest version from the server.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', (e) => {
   let m = {};
-  try { m = e.data ? e.data.json() : {}; } catch { m = { title: 'GolfBuddy', body: e.data && e.data.text() }; }
-  e.waitUntil(self.registration.showNotification(m.title || 'GolfBuddy', {
+  try { m = e.data ? e.data.json() : {}; } catch { m = { title: 'GolfHomie', body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(m.title || 'GolfHomie', {
     body: m.body || '', tag: m.tag, renotify: !!m.tag, requireInteraction: !!m.requireInteraction,
     icon: '/icons/icon-192.png', badge: '/icons/badge-96.png',
     actions: (m.actions || []).slice(0, 2),
@@ -31,7 +31,7 @@ self.addEventListener('notificationclick', (e) => {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rsvp: e.action }),
     }).then((r) => {
       if (!r.ok) throw new Error(r.status);
-      return self.registration.showNotification(e.action === 'in' ? "✅ You're in" : "❌ Marked you as out", { body: 'Your buddy has been told.', tag: n.tag, icon: '/icons/icon-192.png', badge: '/icons/badge-96.png' });
+      return self.registration.showNotification(e.action === 'in' ? "✅ You're in" : "❌ You're out", { body: 'Your homies know.', tag: n.tag, icon: '/icons/icon-192.png', badge: '/icons/badge-96.png' });
     }).catch(() => openApp(d.url)));
     return;
   }

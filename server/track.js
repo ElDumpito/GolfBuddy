@@ -185,6 +185,35 @@ function clubStats(userId) {
   return { clubs, putts, holesTracked, rounds: new Set(rows.map((r) => r.round_id)).size };
 }
 
+// ---- your history on one hole -----------------------------------------------------------
+// Scores from every past round there, your drives (length and miss), and the shot points themselves
+// so they can be drawn faintly on the map. Only your own rounds; the round you're playing is left out.
+function holeHistory(userId, courseId, hole, skipRoundId) {
+  const rounds = db.rounds(1000).filter((r) => r.courseId === courseId && r.id !== skipRoundId && hole >= r.startHole && hole < r.startHole + r.holes);
+  const scores = [];
+  for (const r of rounds) {
+    const s = r.scores.find((x) => x.userId === userId)?.strokes?.[hole - r.startHole];
+    if (s) scores.push({ s, par: r.pars[hole - r.startHole], at: r.playedOn });
+  }
+  const green = holesFor(courseId).find((h) => h.hole === hole)?.green || null;
+  const byRound = new Map();
+  for (const row of q("SELECT s.* FROM shots s JOIN rounds r ON r.id=s.round_id WHERE s.user_id=? AND r.course_id=? AND s.hole=? AND s.deleted=0 AND r.deleted=0 AND s.round_id<>? ORDER BY s.round_id, s.seq")
+    .all(userId, courseId, hole, skipRoundId || 0)) {
+    if (!byRound.has(row.round_id)) byRound.set(row.round_id, []);
+    byRound.get(row.round_id).push(shotRow(row));
+  }
+  const drives = [];
+  for (const pts of byRound.values()) { const m = measureHole(pts, green)[0]; if (m?.yards != null && m.yards > 120) drives.push(m); }
+  const avg = (a) => (a.length ? Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10 : null);
+  return {
+    visits: scores.length, avg: avg(scores.map((x) => x.s)), best: scores.length ? Math.min(...scores.map((x) => x.s)) : null,
+    toPar: avg(scores.map((x) => x.s - x.par)), last: scores.slice(-5).map((x) => x.s),
+    drives: { n: drives.length, avg: drives.length ? Math.round(avg(drives.map((d) => d.yards))) : null, club: drives[drives.length - 1]?.club || null,
+      left: drives.filter((d) => d.offline != null && d.offline < -10).length, right: drives.filter((d) => d.offline != null && d.offline > 10).length },
+    past: [...byRound.values()].slice(-10).map((pts) => pts.map((p) => ({ lat: p.lat, lon: p.lon, kind: p.kind }))),
+  };
+}
+
 // ---- gear lookups (UPCitemdb's free tier: about 100 lookups a day) ---------------------
 async function upcLookup(upc) {
   return svc.cached(`upc:${upc}`, 30 * 86400000, async () => {
@@ -289,7 +318,10 @@ async function handle(req, res, url, me, body, { send, bad, readBody }) {
     return true;
   }
 
-  if (seg[1] === 'courses' && seg[3] === 'holes' && m === 'GET') return send(res, 200, { holes: await ensureHoles(id) });
+  if (seg[1] === 'courses' && seg[3] === 'holes' && m === 'GET') {
+    if (seg[4]) return send(res, 200, { history: holeHistory(me.id, id, Number(seg[4]), Number(url.searchParams.get('skip')) || 0) });
+    return send(res, 200, { holes: await ensureHoles(id) });
+  }
 
   if (seg[1] === 'gear') {
     if (p === '/api/gear/lookup' && m === 'GET') {
@@ -338,4 +370,4 @@ function stateFor(me) {
   return { gear, clubs: clubs?.length ? clubs : DEFAULT_CLUBS, gearKinds: KINDS, brands: BRANDS.brands, support: Object.fromEntries(gear.map((g) => [g.id, supportFor(g.brand)])) };
 }
 
-module.exports = { handle, stateFor, measureHole, holesFromOsm, clubStats, supportFor, DEFAULT_CLUBS };
+module.exports = { handle, stateFor, measureHole, holesFromOsm, clubStats, supportFor, holeHistory, DEFAULT_CLUBS };

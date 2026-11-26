@@ -36,6 +36,43 @@ function measure(points, green) {
 }
 
 // ---------- shot tracker ----------
+const H = { hist: {}, stats: null, statsAt: 0, showPast: false };   // hole history and club averages, cached
+function holeHist(r, holeNo) {
+  const k = `${r.courseId}:${holeNo}:${r.id}`;
+  if (!r.courseId || H.hist[k] !== undefined) return H.hist[k];
+  H.hist[k] = null;
+  api('GET', `/api/courses/${r.courseId}/holes/${holeNo}?skip=${r.id}`).then((d) => { H.hist[k] = d.history; if (trackRound()) render(); }).catch(() => {});
+  return null;
+}
+function clubStatsCached() {
+  if (!H.stats || Date.now() - H.statsAt > 10 * MIN) { H.statsAt = Date.now(); api('GET', '/api/shots/stats').then((d) => { H.stats = d; if (trackRound()) render(); }).catch(() => {}); }
+  return H.stats;
+}
+// The tip card: what happened here before, and which club usually goes the distance you have left.
+function teeTips(r, holeNo, pts) {
+  const h = holeHist(r, holeNo), st = clubStatsCached();
+  const lines = [];
+  if (h && h.visits >= 3) lines.push(`Played ${h.visits} times · avg <b>${h.avg}</b>${h.toPar != null ? ` (${h.toPar > 0 ? '+' : ''}${h.toPar})` : ''} · best ${h.best} · last ${h.last.join(', ')}`);
+  if (h && h.drives.n >= 3) {
+    const miss = h.drives.left > h.drives.right * 1.5 ? `${h.drives.left} of ${h.drives.n} left` : h.drives.right > h.drives.left * 1.5 ? `${h.drives.right} of ${h.drives.n} right` : 'no strong miss';
+    if (!pts.length) lines.push(`Tee shots here: ${h.drives.avg} yds avg, ${miss}`);
+  }
+  const L = layout(holeNo), clubs = (st?.clubs || []).filter((c) => c.shots >= 10 && !/^p(t|utt)/i.test(c.club));
+  if (T.pos && L?.green && clubs.length) {
+    const d = ydsBetween(T.pos, L.green);
+    if (d > 40 && d < 280) {
+      const best = clubs.reduce((a, c) => (Math.abs(c.avg - d) < Math.abs(a.avg - d) ? c : a));
+      if (Math.abs(best.avg - d) < 20) lines.push(`${Math.round(d)} to the green: your <b>${esc(best.club)}</b> averages ${best.avg}${best.right > best.left * 1.5 ? ', tends right' : best.left > best.right * 1.5 ? ', tends left' : ''}`);
+    }
+  }
+  const sel = T.club && clubs.find((c) => c.club === T.club);
+  if (sel) lines.push(`Your ${esc(sel.club)}: ${sel.avg} avg, ${sel.longest} long, ${sel.shots} shots`);
+  if (!lines.length) return '';
+  return `<section class="card" style="padding:12px 14px"><div class="row"><span class="over grow">${h?.visits >= 3 ? 'Here before' : 'Your numbers'}</span>
+    ${h?.past?.length ? `<button class="chip ${H.showPast ? 'on' : ''}" data-act="t-past">${H.showPast ? 'Hide' : 'Show'} past shots</button>` : ''}</div>
+    ${lines.map((l) => `<div class="small-text" style="margin-top:6px">${l}</div>`).join('')}</section>`;
+}
+
 const T = { roundId: null, data: null, loading: false, auto: true, club: null, pos: null, heading: null, watch: null, suggest: null, map: null, mapEl: null, overlays: [], busy: false };
 function trackRound() { const { seg } = route(); return seg[0] === 'r' && seg[2] === 'shots' ? Number(seg[1]) : null; }
 async function loadShots(id) {
@@ -116,13 +153,14 @@ function drawMap(r, holeNo) {
   const L = layout(holeNo);
   const mine = myPoints(holeNo);
   const theirs = (T.data?.shots || []).filter((s) => s.userId !== S.me.id && s.hole === holeNo).sort((a, b) => a.seq - b.seq);
+  const past = H.showPast ? (holeHist(r, holeNo)?.past || []) : [];
   if (S.mapsKey) {
     if (!T.mapEl) { T.mapEl = document.createElement('div'); T.mapEl.style.cssText = 'position:absolute;inset:0'; }
     if (T.mapEl.parentNode !== box) { box.innerHTML = ''; box.appendChild(T.mapEl); }
-    loadMaps().then(() => googleDraw(L, mine, theirs, holeNo)).catch(() => svgDraw(box, L, mine, theirs));
-  } else svgDraw(box, L, mine, theirs);
+    loadMaps().then(() => googleDraw(L, mine, theirs, holeNo, past)).catch(() => svgDraw(box, L, mine, theirs, past));
+  } else svgDraw(box, L, mine, theirs, past);
 }
-function googleDraw(L, mine, theirs, holeNo) {
+function googleDraw(L, mine, theirs, holeNo, past = []) {
   const g = google.maps;
   if (!T.map) {
     T.map = new g.Map(T.mapEl, { mapTypeId: 'satellite', tilt: 0, disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy', backgroundColor: '#0e1512' });
@@ -136,13 +174,14 @@ function googleDraw(L, mine, theirs, holeNo) {
   const ext = (p) => p && bounds.extend({ lat: p.lat, lng: p.lon });
   if (L?.tee) { dot(L.tee, '#ece6d6', 'T', 8); ext(L.tee); }
   if (L?.green) { add(new g.Marker({ map: T.map, position: { lat: L.green.lat, lng: L.green.lon }, icon: { path: 'M0 0 L0 -26 L14 -20 L0 -14', strokeColor: '#fff', strokeWeight: 2, fillColor: '#cbab6b', fillOpacity: 1, scale: 1 } })); ext(L.green); }
+  for (const pts of past) { const pl = add(new g.Polyline({ map: T.map, path: pts.map((p) => ({ lat: p.lat, lng: p.lon })), strokeColor: '#ece6d6', strokeOpacity: 0.28, strokeWeight: 1.5 })); pts.forEach((p) => dot(p, 'rgba(236,230,214,.45)', null, 3)); }
   line(theirs, '#93b8d8'); theirs.forEach((p) => { dot(p, '#93b8d8', null, 5); ext(p); });
   line(mine, '#e3c88f'); mine.forEach((p, k) => { dot(p, p.kind === 'pin' ? '#86ba95' : '#e3c88f', p.kind === 'pin' ? '' : k + 1); ext(p); });
   if (T.pos) { dot(T.pos, '#4f8ef7', null, 6); ext(T.pos); }
   if (T.lastFit !== `${holeNo}:${mine.length}` && !bounds.isEmpty()) { T.map.fitBounds(bounds, 40); T.lastFit = `${holeNo}:${mine.length}`; if (T.map.getZoom() > 19) T.map.setZoom(19); }
 }
-function svgDraw(box, L, mine, theirs) {
-  const pts = [L?.tee, L?.green, ...mine, ...theirs, T.pos].filter(Boolean);
+function svgDraw(box, L, mine, theirs, past = []) {
+  const pts = [L?.tee, L?.green, ...mine, ...theirs, ...past.flat(), T.pos].filter(Boolean);
   if (!pts.length) { box.innerHTML = `<div class="ph">${S.mapsKey ? 'Loading map…' : 'Your shots draw here as you mark them.<br>Add the Google browser key in Me › Admin for the satellite view.'}</div>`; return; }
   const lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length, kx = Math.cos(lat0 * RADS);
   const xy = (p) => ({ x: p.lon * kx, y: -p.lat });
@@ -155,6 +194,7 @@ function svgDraw(box, L, mine, theirs) {
   box.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" style="display:block;background:radial-gradient(circle at 50% 40%, #183022, #0e1512)">
     ${L?.tee && L?.green ? `<line x1="${at(L.tee)[0]}" y1="${at(L.tee)[1]}" x2="${at(L.green)[0]}" y2="${at(L.green)[1]}" stroke="rgba(236,230,214,.18)" stroke-width="16" stroke-linecap="round"/>` : ''}
     ${L?.green ? circ(L.green, '#86ba95', 11) : ''}${L?.tee ? circ(L.tee, '#ece6d6', 6, 'T') : ''}
+    ${past.map((pp) => `<g opacity=".35">${path(pp, '#ece6d6')}${pp.map((p) => circ(p, '#ece6d6', 2.5)).join('')}</g>`).join('')}
     ${path(theirs, '#93b8d8')}${theirs.map((p) => circ(p, '#93b8d8', 4)).join('')}
     ${path(mine, '#e3c88f')}${mine.map((p, k) => circ(p, p.kind === 'pin' ? '#86ba95' : '#e3c88f', 8, p.kind === 'pin' ? '' : k + 1)).join('')}
     ${T.pos ? circ(T.pos, '#4f8ef7', 6) : ''}</svg>`;
@@ -177,6 +217,7 @@ function viewShots(id) {
     right: `<button class="chip ${T.auto ? 'on' : ''}" data-act="t-auto">${icon('locate', 'sm')} Auto</button>`,
     body: `<div class="holebar">${r.pars.map((_, k) => `<button class="${k === i ? 'on' : myPoints(r.startHole + k).length ? 'done' : ''}" data-act="t-hole" data-v="${k}">${r.startHole + k}</button>`).join('')}</div>
     <div id="suggest"></div>
+    ${teeTips(r, holeNo, pts)}
     <section class="card">
       <div class="grid2" style="align-items:end">
         <div><div class="over">To green</div><div class="yard num"><span id="live-green">–</span><span class="small dim"> yds</span></div></div>
@@ -363,6 +404,7 @@ window.afterRender = () => {
 };
 
 Object.assign(handlers, {
+  't-past': () => { H.showPast = !H.showPast; T.lastFit = null; render(); },
   't-auto': () => { T.auto = !T.auto; toast(T.auto ? 'Auto: follows your position between holes' : 'Auto off: pick holes yourself'); render(); },
   't-hole': (el, seg) => { ui.hole[Number(seg[1])] = Number(el.dataset.v); T.suggest = null; T.club = null; render(); },
   't-go-hole': (el, seg) => { const r = S.rounds.find((x) => x.id === Number(seg[1])); ui.hole[r.id] = Number(el.dataset.v) - r.startHole; T.suggest = null; T.club = null; render(); },

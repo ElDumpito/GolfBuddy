@@ -208,6 +208,23 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await reminderTick(Date.now() + 60000, async () => null); await wait(150);
   assert.ok(!take(mike.id).some((m) => /start the scorecard/.test(m.body)), 'only once');
 
+  // ---- hole history for tips at the tee ------------------------------------------------------
+  for (const score of [4, 6]) {
+    const rr = (await call('ck', 'POST', '/api/rounds', { course: 'Rancho Park', holes: 18, players: [ck.id] })).data.round;
+    await call('ck', 'PUT', `/api/rounds/${rr.id}`, { scores: { [ck.id]: [score] } });
+    await call('ck', 'POST', `/api/rounds/${rr.id}/shots`, { hole: 1, club: 'Dr', ...pt(0) });
+    await call('ck', 'POST', `/api/rounds/${rr.id}/shots`, { hole: 1, club: '9i', ...pt(250) });
+  }
+  const now2 = (await call('ck', 'POST', '/api/rounds', { course: 'Rancho Park', holes: 18, players: [ck.id] })).data.round;
+  const hist = (await call('ck', 'GET', `/api/courses/${round.courseId}/holes/1?skip=${now2.id}`)).data.history;
+  assert.strictEqual(hist.visits, 3);
+  assert.strictEqual(hist.avg, 5);
+  assert.strictEqual(hist.best, 4);
+  assert.strictEqual(hist.drives.n, 2, 'the zero-yard "drive" from the first card is ignored');
+  assert.ok(Math.abs(hist.drives.avg - 250) <= 3, String(hist.drives.avg));
+  assert.strictEqual(hist.past.length, 3);
+  assert.strictEqual((await call('mike', 'GET', `/api/courses/${round.courseId}/holes/1`)).data.history.visits, 0, "history is only your own");
+
   server.close(); pushSrv.close();
   console.log('v3: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

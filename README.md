@@ -91,3 +91,11 @@ One-time setup:
 5. Gmail › Settings › Forwarding › Add `bookings@juno.nexus`. Gmail's code shows up in GolfHomie (push + Admin). Then a filter:
    `from:(alerts@teetimeinfo.com OR golfnow.com OR foreup)` › Forward to `bookings@juno.nexus`.
 6. Each person puts the Gmail they forward from in Me, so their tee times are filed under them.
+
+## Homies
+
+Each person has a QR code (Me › Homies › My code) that links whoever scans it, with a phone camera or the in-app scanner.
+Someone new can sign up from it without the invite code, but Cloudflare Access still has to let their email in first
+(Zero Trust › Access › the GolfHomie app's policy). You only see your Homies, the tee times and rounds you're on, and
+money you're part of; who-owes-who is counted pair by pair. Everyone who used the app before Homies were linked once at upgrade.
+`public/vendor/qrcode.js` is qrcode-generator 2.0.4 (MIT, Kazuhiko Arase).

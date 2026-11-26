@@ -406,21 +406,50 @@ async function inbound(payload) {
 }
 
 // ---- the API ------------------------------------------------------------------
+// ---- who can see what: your own tee times, rounds and money, and your Homies -------------------
+const onBooking = (b, id) => b.createdBy === id || b.roster.some((r) => r.userId === id);
+const onRound = (r, id) => r.createdBy === id || r.scores.some((s) => s.userId === id);
+const inExpense = (e, id) => e.paidBy === id || e.createdBy === id || e.split[id] != null;
+// What you and each other person owe each other, counted pair by pair (so nobody is ever told to pay
+// someone they never played with). Positive = they owe you.
+function pairwise(meId) {
+  const net = new Map();
+  const add = (id, x) => { if (id !== meId) net.set(id, (net.get(id) || 0) + x); };
+  for (const e of db.expenses(100000)) {
+    if (e.paidBy === meId) for (const [uid, share] of Object.entries(e.split)) add(Number(uid), share);
+    else if (e.split[meId] != null) add(e.paidBy, -e.split[meId]);
+  }
+  for (const s of db.settlements(100000)) { if (s.fromId === meId) add(s.toId, s.amount); else if (s.toId === meId) add(s.fromId, -s.amount); }
+  return net;
+}
 function state(me) {
-  const balances = db.balances();
+  const homies = new Set(db.homiesOf(me.id));
+  const bookings = db.bookings(Date.now() - 180 * 24 * HOUR).filter((b) => onBooking(b, me.id));
+  const rounds = db.rounds().filter((r) => onRound(r, me.id));
+  const expenses = db.expenses().filter((e) => inExpense(e, me.id));
+  const settlements = db.settlements().filter((s) => [s.fromId, s.toId, s.createdBy].includes(me.id));
+  const seen = new Set([me.id, ...homies]);
+  for (const b of bookings) b.roster.forEach((r) => seen.add(r.userId));
+  for (const r of rounds) r.scores.forEach((s) => seen.add(s.userId));
+  for (const e of expenses) { seen.add(e.paidBy); Object.keys(e.split).forEach((k) => seen.add(Number(k))); }
+  for (const s of settlements) { seen.add(s.fromId); seen.add(s.toId); }
+  const net = pairwise(me.id);
+  const owed = [...net].filter(([, x]) => x).map(([id, x]) => (x > 0 ? { fromId: id, toId: me.id, amount: x } : { fromId: me.id, toId: id, amount: -x }));
+  // Your total, and each other person's standing with you (for a twosome, the same as their total).
+  const balances = [{ userId: me.id, balance: [...net.values()].reduce((a, x) => a + x, 0) }, ...[...net].map(([id, x]) => ({ userId: id, balance: -x }))];
   return {
-    me: db.ownProfile(me), users: db.users(), courses: db.courses(),
-    bookings: db.bookings(Date.now() - 180 * 24 * HOUR), expenses: db.expenses(), settlements: db.settlements(),
-    balances, transfers: transfers(balances), rounds: db.rounds(), categories: CATEGORIES,
+    me: db.ownProfile(me), users: db.users().filter((u) => seen.has(u.id)).map((u) => ({ ...u, homie: homies.has(u.id) })), courses: db.courses(),
+    bookings, expenses, settlements,
+    balances, transfers: owed, rounds, categories: CATEGORIES,
     push: { key: VAPID.publicKey, mine: db.subCount(me.id) }, remindHours: REMIND_HOURS,
     invite: me.is_admin ? INVITE : undefined,
     // The browser key is meant to be public (it only works on this site); the server key never leaves the server.
     mapsKey: svc.key('google_browser_key') || null,
     features: { google: !!svc.key('google_server_key'), calls: twilioReady() },
-    wakeOn: Object.fromEntries(db.bookings(Date.now() - 6 * HOUR).map((b) => [b.id, wakeOn(b)])),
+    wakeOn: Object.fromEntries(bookings.filter((b) => b.teeAt > Date.now() - 6 * HOUR).map((b) => [b.id, wakeOn(b)])),
     ...track.stateFor(me),
     // Published-rate price for each L.A. City tee time, so the app can show where a total comes from.
-    quotes: Object.fromEntries(db.bookings(Date.now() - 180 * 24 * HOUR).filter((b) => rates.isLaCity(b.course)).map((b) => [b.id, rates.quoteBooking(b, cardMap())])),
+    quotes: Object.fromEntries(bookings.filter((b) => rates.isLaCity(b.course)).map((b) => [b.id, rates.quoteBooking(b, cardMap())])),
   };
 }
 
@@ -433,6 +462,23 @@ async function api(req, res, url, me) {
   const bad = (msg, code = 400) => send(res, code, { error: msg });
 
   if (p === '/api/state' && m === 'GET') return send(res, 200, state(me));
+
+  // Tee times and rounds you're not part of don't exist, as far as you're concerned.
+  if (seg[1] === 'bookings' && seg[2] && !Number.isNaN(id)) { const b = db.bookingById(id); if (b && !onBooking(b, me.id)) return bad('That tee time no longer exists', 404); }
+  if (seg[1] === 'rounds' && seg[2]) { const r = db.roundById(id); if (r && !onRound(r, me.id)) return bad('That scorecard no longer exists', 404); }
+
+  if (seg[1] === 'homies') {
+    if (seg[2] === 'code') return send(res, 200, { code: db.homieCode(me.id, m === 'POST' && body.fresh) });
+    if (m === 'POST' && seg.length === 2) {
+      const u = db.userByHomieCode(body.code);
+      if (!u) return bad('That code didn’t match anyone. Ask them to show it again.', 404);
+      if (u.id === me.id) return bad('That’s your own code');
+      const added = db.link(me.id, u.id);
+      if (added) notify([u.id], { title: `🤝 ${firstName(me.id)} is your Homie now`, body: 'You can add each other to tee times and scorecards.', url: '/#/me', tag: `h${me.id}` });
+      return send(res, 200, { homie: db.pubUser(u), added });
+    }
+    if (m === 'DELETE' && seg[2]) { db.unlink(me.id, Number(seg[2])); return send(res, 200, { ok: true }); }
+  }
 
   // Shot tracking, photos, hole layouts and the gear closet (server/track.js).
   if (['shots', 'photos', 'gear'].includes(seg[1]) || (seg[1] === 'rounds' && ['shots', 'gear'].includes(seg[3])) || (seg[1] === 'courses' && seg[3] === 'holes')) {
@@ -756,9 +802,13 @@ async function handle(req, res) {
         const username = str(b.username, 24);
         if (!/^[A-Za-z0-9_.-]{2,24}$/.test(username)) return send(res, 400, { error: 'Username: 2 to 24 letters or numbers' });
         if (String(b.password || '').length < 6) return send(res, 400, { error: 'Password needs at least 6 characters' });
-        if (String(b.invite || '').trim() !== INVITE) return send(res, 403, { error: 'Wrong invite code' });
+        // Either the group invite code, or a Homie's QR code (which links you with them).
+        const via = db.userByHomieCode(b.homie);
+        if (!via && String(b.invite || '').trim() !== INVITE) return send(res, 403, { error: 'Wrong invite code' });
         if (db.userByName(username)) return send(res, 409, { error: 'That username is taken' });
         const u = db.createUser(username, String(b.password), str(b.name, 30) || username, db.userCount() === 0);
+        if (via) db.link(u.id, via.id);
+        else for (const a of db.allUsersRaw().filter((x) => x.is_admin && x.id !== u.id)) db.link(u.id, a.id);
         return send(res, 200, { me: db.pubUser(u) }, { 'Set-Cookie': sessionCookie(req, db.createSession(u.id)) });
       }
       if (p === '/api/login' && req.method === 'POST') {

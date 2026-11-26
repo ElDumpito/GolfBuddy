@@ -395,9 +395,13 @@ function bookingCard(b, ids, due) {
 }
 
 // ---------- add / edit a tee time ----------
+// Who's in by default: you and your one Homie; with more Homies, just you (tap to add the group).
+const defaultGroup = () => { const h = S.users.filter((u) => u.homie).map((u) => u.id); return h.length === 1 ? [S.me.id, h[0]] : [S.me.id]; };
+// People you can put on a tee time or scorecard: you and your Homies (plus anyone already on it).
+const pickable = (extra = []) => S.users.filter((u) => u.id === S.me.id || u.homie || extra.includes(u.id));
 function blankForm() {
   const tomorrow = laParts(Date.now() + 24 * HOUR).date;
-  return { course: '', date: tomorrow, time: '07:00', players: 2, holes: 18, bookerId: S.me.id, roster: S.users.map((u) => u.id), total: '', deposit: '',
+  return { course: '', date: tomorrow, time: '07:00', players: 2, holes: 18, bookerId: S.me.id, roster: defaultGroup(), total: '', deposit: '',
     cancelHours: 24, confirmation: '', address: '', phone: '', notes: '', source: 'Manual', paste: '', ride: 'walk', balanceBy: '', autoPrice: true };
 }
 function formFromBooking(b) {
@@ -449,7 +453,7 @@ function viewForm(id) {
       <div class="grid2"><div><label for="f-players">Players in the booking</label><select id="f-players">${[1, 2, 3, 4, 5, 6, 7, 8].map((n) => opt(n, f.players)).join('')}</select></div>
         <div><label>Holes</label><div class="seg"><button data-act="holes" data-v="18" class="${f.holes === 18 ? 'on' : ''}">18</button><button data-act="holes" data-v="9" class="${f.holes === 9 ? 'on' : ''}">9</button></div></div></div>
       <label for="f-booker">Booked (and deposit paid) by</label><select id="f-booker">${S.users.map((u) => opt(u.id, f.bookerId, u.name)).join('')}</select>
-      <label>Who's splitting it</label><div class="chips">${S.users.map((u) => `<button class="chip ${f.roster.includes(u.id) ? 'on' : ''}" data-act="roster" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
+      <label>Who's splitting it</label><div class="chips">${pickable(f.roster).map((u) => `<button class="chip ${f.roster.includes(u.id) ? 'on' : ''}" data-act="roster" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
       <label>Getting around</label><div class="seg">${RIDES.map(([k, l]) => `<button data-act="f-ride" data-v="${k}" class="${f.ride === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="grid2"><div><label for="f-total">Total cost ($)</label><input id="f-total" inputmode="decimal" value="${esc(f.total)}" placeholder="0" ${f.autoPrice && isLaCityName(f.course) ? 'readonly' : ''}></div>
         <div><label for="f-deposit">Deposit paid ($)</label><input id="f-deposit" inputmode="decimal" value="${esc(f.deposit)}" placeholder="0"></div></div>
@@ -661,7 +665,7 @@ function headToHead() {
   return out.join('');
 }
 function viewScores() {
-  if (!ui.round) ui.round = { course: '', date: laParts(Date.now()).date, holes: 18, start: 1, players: S.users.map((u) => u.id), open: false };
+  if (!ui.round) ui.round = { course: '', date: laParts(Date.now()).date, holes: 18, start: 1, players: defaultGroup(), open: false };
   const n = ui.round;
   const h2h = headToHead();
   return frame({
@@ -670,7 +674,7 @@ function viewScores() {
       <label for="r-course">Course</label><input id="r-course" list="courses2" value="${esc(n.course)}" autocomplete="off"><datalist id="courses2">${S.courses.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>
       <div class="grid2"><div><label for="r-date">Date</label><input id="r-date" type="date" value="${esc(n.date)}"></div>
       <div><label>Holes</label><div class="seg"><button data-act="r-holes" data-v="18" class="${n.holes === 18 ? 'on' : ''}">18</button><button data-act="r-holes" data-v="9" class="${n.holes === 9 && n.start === 1 ? 'on' : ''}">F9</button><button data-act="r-holes" data-v="9b" class="${n.holes === 9 && n.start === 10 ? 'on' : ''}">B9</button></div></div></div>
-      <label>Players</label><div class="chips">${S.users.map((u) => `<button class="chip ${n.players.includes(u.id) ? 'on' : ''}" data-act="r-player" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
+      <label>Players</label><div class="chips">${pickable(n.players).map((u) => `<button class="chip ${n.players.includes(u.id) ? 'on' : ''}" data-act="r-player" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>
       <button class="primary block" style="margin-top:16px" data-act="r-start">Start scoring</button>`
       : `<button class="primary block" data-act="r-open">${icon('plus')} New scorecard</button>`}</section>
     <section class="card flush list"><a class="link-row" href="#/trends"><span class="ic">${icon('trend')}</span><span class="grow"><b>Your game</b><div class="small-text dim">Distance by club, misses, and scoring</div></span><span class="faint">${icon('chev')}</span></a></section>
@@ -804,6 +808,52 @@ function viewPost(id) {
   });
 }
 
+// ---------- homies ----------
+// Your QR code links whoever scans it with you (and lets someone new sign up without the invite code).
+// Scanning uses Chrome's built-in reader; a phone's own camera app works too, since the code is a link.
+const homieUrl = (code) => `${location.origin}/#/homie/${code}`;
+let qrLoading = null;
+const loadQr = () => window.qrcode ? Promise.resolve() : (qrLoading ||= new Promise((ok, no) => { const s = document.createElement('script'); s.src = '/vendor/qrcode.js'; s.onload = ok; s.onerror = no; document.head.appendChild(s); }));
+function homiesCard() {
+  const homies = S.users.filter((u) => u.homie);
+  return `<section class="card"><div class="card-head"><h2>Homies</h2><button class="chip" data-act="homie-qr">${icon('card', 'sm')} My code</button><button class="chip" data-act="homie-scan">${icon('camera', 'sm')} Scan</button></div>
+    ${ui.qr ? `<div style="text-align:center;margin:4px 0 12px"><div id="qrbox" style="display:inline-block;background:#fff;padding:12px;border-radius:16px">${ui.qr}</div>
+      <div class="tiny faint" style="margin-top:8px">Have them scan this with their camera or GolfHomie. Someone new can sign up from it without the invite code${location.hostname.includes('juno.nexus') ? ', once you’ve added their email to the Cloudflare login list' : ''}.</div>
+      <button class="chip" style="margin-top:6px" data-act="homie-newcode">New code</button></div>` : ''}
+    <div id="scanbox"></div>
+    <div class="list">${homies.length ? homies.map((u) => `<div class="line"><span class="grow"><b>${esc(u.name)}</b> <span class="tiny faint">@${esc(u.username)}</span></span><button class="x" data-act="homie-drop" data-id="${u.id}" aria-label="Remove">✕</button></div>`).join('') : '<div class="empty">No Homies yet. Show your code or scan theirs.</div>'}</div></section>`;
+}
+async function showQr(fresh) {
+  const { code } = await api(fresh ? 'POST' : 'GET', '/api/homies/code', fresh ? { fresh: true } : undefined);
+  await loadQr();
+  const qr = qrcode(0, 'M'); qr.addData(homieUrl(code)); qr.make();
+  ui.qr = qr.createSvgTag({ cellSize: 5, margin: 0, scalable: false });
+  render();
+}
+async function scanQr() {
+  if (!('BarcodeDetector' in window)) return toast('Use your phone’s camera app to scan their code');
+  const box = $('#scanbox');
+  const det = new BarcodeDetector({ formats: ['qr_code'] });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  box.innerHTML = '<div style="position:relative;margin:4px 0 12px"><video playsinline muted style="width:100%;border-radius:14px;display:block"></video><button class="chip" style="position:absolute;right:8px;top:8px" data-act="homie-scan-stop">Stop</button></div>';
+  const v = box.querySelector('video'); v.srcObject = stream; await v.play();
+  window.__scanning = true;
+  const stop = () => { stream.getTracks().forEach((t) => t.stop()); box.innerHTML = ''; window.__scanning = false; ui.scanStop = null; };
+  ui.scanStop = stop;
+  const t0 = Date.now();
+  while (ui.scanStop && Date.now() - t0 < 45000) {
+    const codes = await det.detect(v).catch(() => []);
+    const m = codes.map((c) => c.rawValue.match(/#\/homie\/([\w-]+)/)).find(Boolean);
+    if (m) { stop(); return linkHomie(m[1]); }
+    await new Promise((ok) => setTimeout(ok, 250));
+  }
+  ui.scanStop?.();
+}
+async function linkHomie(code) {
+  try { const r = await api('POST', '/api/homies', { code }); await refresh(false); toast(r.added ? `${r.homie.name} is your Homie now` : `You and ${r.homie.name} are already Homies`); go('#/me'); }
+  catch (e) { toast(e.message); go('#/me'); }
+}
+
 // ---------- me ----------
 function viewMe() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
@@ -811,7 +861,7 @@ function viewMe() {
   const teeNames = [...new Set(S.courses.flatMap((c) => c.info?.tees?.map((t) => t.name.split('/')[0]) || []))];
   return frame({
     title: 'Me', tab: 'me',
-    body: `${themePicker()}<section class="card" id="mf"><h2>Profile</h2>
+    body: `${themePicker()}${homiesCard()}<section class="card" id="mf"><h2>Profile</h2>
       <label for="m-name">Name</label><input id="m-name" value="${esc(me.name)}">
       <label for="m-venmo">Venmo username</label><input id="m-venmo" value="${esc(me.venmo)}" placeholder="without the @" autocapitalize="off">
       <label for="m-hcp">Handicap Index <span class="faint">(for posting scores; leave blank if you don't have one)</span></label><input id="m-hcp" inputmode="decimal" value="${me.hcp ?? ''}" placeholder="e.g. 14.2, or +1.5">
@@ -910,15 +960,18 @@ function viewAuth() {
     <form id="authf"><label for="u">Username</label><input id="u" autocomplete="username" autocapitalize="off" required>
     ${reg ? '<label for="n">Your name</label><input id="n" placeholder="Mike">' : ''}
     <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required>
-    ${reg ? '<label for="inv">Invite code</label><input id="inv" autocapitalize="off" required>' : ''}
+    ${reg && !ui.homieCode ? '<label for="inv">Invite code</label><input id="inv" autocapitalize="off" required>' : ''}
+    ${reg && ui.homieCode ? '<p class="tiny faint" style="margin:10px 0 0">You were invited by a Homie, so no invite code needed.</p>' : ''}
     <button class="primary block" style="margin-top:18px">${reg ? 'Create account' : 'Log in'}</button></form></main>`;
 }
 
 // ---------- render & events ----------
 function render() {
   const app = $('#app');
-  if (!S) { app.innerHTML = viewAuth(); return; }
   const { seg, q } = route();
+  if (seg[0] === 'homie' && seg[1]) ui.homieCode = seg[1];
+  if (!S) { if (ui.homieCode) ui.authMode = ui.authMode || 'register'; app.innerHTML = viewAuth(); return; }
+  if (seg[0] === 'homie' && seg[1]) { ui.homieCode = null; app.innerHTML = '<div class="card empty" style="margin:30vh 16px">Linking…</div>'; linkHomie(seg[1]); return; }
   const id = Number(seg[1]);
   let html;
   if (seg[0] === 'b' && seg[2] === 'edit') html = viewForm(id);
@@ -966,7 +1019,9 @@ document.addEventListener('submit', async (e) => {
   e.preventDefault();
   const reg = ui.authMode === 'register';
   try {
-    await api('POST', reg ? '/api/register' : '/api/login', { username: $('#u').value, password: $('#pw').value, name: $('#n')?.value, invite: $('#inv')?.value });
+    await api('POST', reg ? '/api/register' : '/api/login', { username: $('#u').value, password: $('#pw').value, name: $('#n')?.value, invite: $('#inv')?.value, homie: ui.homieCode || undefined });
+    if (!reg && ui.homieCode) { const c = ui.homieCode; ui.homieCode = null; await refresh(false); await linkHomie(c); }
+    ui.homieCode = null; if (location.hash.startsWith('#/homie')) location.hash = '#/';
     await refresh(); syncPush();
   } catch (err) { toast(err.message); }
 });
@@ -1078,6 +1133,11 @@ document.addEventListener('click', async (e) => {
       case 'del-round': if (confirm('Delete this scorecard?')) { await api('DELETE', `/api/rounds/${el.dataset.id}`); await refresh(false); go('#/scores'); } break;
       // me
       case 'me-wake': el.classList.toggle('on'); break;
+      case 'homie-qr': if (ui.qr) { ui.qr = null; render(); } else await showQr(false); break;
+      case 'homie-newcode': if (confirm('Make a new code? The old one stops working.')) await showQr(true); break;
+      case 'homie-scan': try { await scanQr(); } catch (err) { toast(err.name === 'NotAllowedError' ? 'Camera is blocked for this site' : err.message); } break;
+      case 'homie-scan-stop': ui.scanStop?.(); break;
+      case 'homie-drop': { const u = user(Number(el.dataset.id)); if (confirm(`Remove ${u.name} as a Homie? Past rounds and money stay.`)) { await api('DELETE', `/api/homies/${u.id}`); await refresh(); } break; }
       case 'inbound-rotate': if (confirm('Make a new key? The Cloudflare worker stops working until you paste the new one into it.')) { ui.inbound = await api('POST', '/api/admin/inbound', { rotate: true }); render(); } break;
       case 'theme': S.me.theme = v; applyTheme(v); render(); api('POST', '/api/me/theme', { theme: v }).catch(() => {}); break;
       case 'save-me': {

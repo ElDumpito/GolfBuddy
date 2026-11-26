@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER
 CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, booking_id INTEGER, course_id INTEGER, course TEXT, played_on INTEGER,
   holes INTEGER DEFAULT 18, start_hole INTEGER DEFAULT 1, pars TEXT, created_by INTEGER, created INTEGER, deleted INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS scores (round_id INTEGER, user_id INTEGER, strokes TEXT, PRIMARY KEY(round_id, user_id));
+-- Homies: two people who play together and can see each other (a < b).
+CREATE TABLE IF NOT EXISTS homies (a INTEGER, b INTEGER, created INTEGER, PRIMARY KEY(a, b));
 -- Answers from outside services (weather, drive times, places), kept until exp.
 CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT, exp INTEGER);
 CREATE INDEX IF NOT EXISTS bookings_tee ON bookings(tee_at);
@@ -57,7 +59,12 @@ addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], 
   // L.A. City Player Card: whether they have one (it moves twilight pricing an hour earlier), and the
   // card number and renewal date kept for safe keeping (only shown to the card's owner).
   ['card', 'INTEGER DEFAULT 1'], ['card_no', 'TEXT'], ['card_exp', 'TEXT'], ['card_reminded', 'TEXT'],
-  ['theme', 'TEXT'], ['hcp', 'REAL'], ['fwd', 'TEXT']]);
+  ['theme', 'TEXT'], ['hcp', 'REAL'], ['fwd', 'TEXT'], ['homie_code', 'TEXT']]);
+// Everyone who used the app before Homies existed already played together: link them all once.
+if (!q('SELECT COUNT(*) c FROM homies').get().c) {
+  const ids = q('SELECT id FROM users ORDER BY id').all().map((u) => u.id);
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) q('INSERT OR IGNORE INTO homies(a, b, created) VALUES(?,?,?)').run(ids[i], ids[j], Date.now());
+}
 // wake: NULL = automatic (on for tee times before 8 a.m.), 0 = off, 1 = on. wake_log: what the caller did, per person.
 addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT'], ['tee_nudged', 'INTEGER DEFAULT 0'],
   // ride: walk | push | cart. price_auto: the total comes from the course's published rates.
@@ -199,6 +206,17 @@ const api = {
   setBalanceBy: (id, uid) => q('UPDATE bookings SET balance_by=? WHERE id=?').run(uid || null, id),
   wxState: (id) => json(q('SELECT wx FROM bookings WHERE id=?').get(id)?.wx, null),
   setWxState: (id, v) => q('UPDATE bookings SET wx=? WHERE id=?').run(JSON.stringify(v), id),
+  // ---- homies ----
+  homiesOf: (id) => q('SELECT b x FROM homies WHERE a=? UNION SELECT a x FROM homies WHERE b=?').all(id, id).map((r) => r.x),
+  link: (x, y) => { if (x === y) return false; const [a, b] = x < y ? [x, y] : [y, x]; return q('INSERT OR IGNORE INTO homies(a, b, created) VALUES(?,?,?)').run(a, b, Date.now()).changes > 0; },
+  unlink: (x, y) => { const [a, b] = x < y ? [x, y] : [y, x]; q('DELETE FROM homies WHERE a=? AND b=?').run(a, b); },
+  // The code in someone's QR: random, and can be replaced if it gets passed around.
+  homieCode(id, fresh) {
+    let c = q('SELECT homie_code FROM users WHERE id=?').get(id)?.homie_code;
+    if (!c || fresh) { c = crypto.randomBytes(9).toString('base64url'); q('UPDATE users SET homie_code=? WHERE id=?').run(c, id); }
+    return c;
+  },
+  userByHomieCode: (c) => (c ? q('SELECT * FROM users WHERE homie_code=?').get(String(c)) || null : null),
   setHcp: (id, h) => q('UPDATE users SET hcp=? WHERE id=?').run(h, id),
   teeNudgesDue: (now) => q("SELECT * FROM bookings WHERE status='active' AND tee_nudged=0 AND tee_at BETWEEN ? AND ?").all(now - 3600000, now + 15 * 60000).map((b) => ({ ...bookingRow(b), roster: api.roster(b.id) })),
   markTeeNudged: (id) => q('UPDATE bookings SET tee_nudged=1 WHERE id=?').run(id),

@@ -287,6 +287,13 @@ async function reminderTick(now = Date.now(), getWx = forecast) {
       if (now < b.teeAt) await notify(going, { title: `🏌️ Tomorrow: ${b.course}`, body: `${fmtWhen(b.teeAt)}.${w ? ` ${w[0].toUpperCase()}${w.slice(1)}.` : ''} Tap for the details and directions.`, url: bookingUrl(b.id), tag: `b${b.id}` });
     }
   }
+  // Fifteen minutes before tee time: "start your scorecard?", for anyone without a card going yet.
+  for (const b of db.teeNudgesDue(now)) {
+    db.markTeeNudged(b.id);
+    if (now > b.teeAt + 30 * 60000 || db.rounds(500).some((r) => r.bookingId === b.id)) continue;
+    const going = b.roster.filter((r) => r.rsvp !== 'out').map((r) => r.userId);
+    await notify(going, { title: `⛳ ${fmtWhen(b.teeAt).split(', ').pop()} at ${b.course}`, body: 'Tap to start the scorecard for the group.', url: `/#/b/${b.id}/score`, tag: `t${b.id}` });
+  }
   // Player Card renewal: two weeks' notice, once per expiry date.
   for (const u of db.allUsersRaw()) {
     if (!u.card_exp || u.card_reminded === u.card_exp) continue;
@@ -402,6 +409,12 @@ async function api(req, res, url, me) {
       const wakeOk = !!body.wakeOk;
       if (wakeOk && (!phone || homeLat == null)) return bad('Wake-up calls need your phone number and home address');
       db.setTravel(me.id, { phone, home, homeLat, homeLon, arriveMins, wakeOk, tee: str(body.tee, 30) });
+    }
+    if ('hcp' in body) {
+      // Handicap Index, for the GHIN posting screen. Blank = none yet. Plus handicaps are entered as negatives.
+      const h = body.hcp === '' || body.hcp == null ? null : Number(String(body.hcp).replace('+', '-'));
+      if (h != null && !(h >= -10 && h <= 54)) return bad('Handicap Index is between +10 and 54');
+      db.setHcp(me.id, h == null ? null : Math.round(h * 10) / 10);
     }
     if ('cardNo' in body || 'card' in body) {
       const cardNo = str(body.cardNo, 24);
@@ -577,6 +590,7 @@ async function api(req, res, url, me) {
     }
     const r = db.roundById(id);
     if (!r) return bad('That scorecard no longer exists', 404);
+    if (m === 'GET') return send(res, 200, { round: r });
     if (m === 'PUT') {
       if (body.pars) {
         if (!Array.isArray(body.pars) || body.pars.length !== r.holes || !body.pars.every((x) => [3, 4, 5, 6].includes(Number(x)))) return bad('Pars must be 3 to 6');

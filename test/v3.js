@@ -188,6 +188,26 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.strictEqual(twilioCalls[0].To, '+12135550199');
   assert.match(twilioCalls[0].Twiml, /test call/);
 
+  // ---- scoring from shots, live round reads, handicap index, tee-time nudge ----------------------
+  const round = (await call('ck', 'POST', '/api/rounds', { course: 'Rancho Park', holes: 18, players: [ck.id, mike.id] })).data.round;
+  const pt = (n) => ({ lat: 34.036 + n * 0.0000082, lon: -118.425, acc: 4 });
+  for (const club of ['Dr', '8i', 'SW']) await call('ck', 'POST', `/api/rounds/${round.id}/shots`, { hole: 1, club, ...pt(0) });
+  const holed = (await call('ck', 'POST', `/api/rounds/${round.id}/shots`, { hole: 1, kind: 'pin', putts: 2, ...pt(380) })).data;
+  assert.strictEqual(holed.round.scores.find((x) => x.userId === ck.id).strokes[0], 5, '3 marked shots + 2 putts');
+  const seen = (await call('mike', 'GET', `/api/rounds/${round.id}`)).data.round;
+  assert.strictEqual(seen.scores.find((x) => x.userId === ck.id).strokes[0], 5, "Mike's phone sees CK's score");
+  assert.strictEqual((await call('ck', 'POST', '/api/me', { name: 'CK', venmo: '', hcp: '99' })).status, 400);
+  await call('ck', 'POST', '/api/me', { name: 'CK', venmo: '', hcp: '+1.5' });
+  assert.strictEqual((await call('ck', 'GET', '/api/state')).data.me.hcp, -1.5);
+  take(ck.id); take(mike.id);
+  const soon = Date.now() + 10 * 60000;
+  const tb = (await call('ck', 'POST', '/api/bookings', { course: 'Griffith Park - Wilson', teeAt: soon, players: 2, holes: 18, bookerId: ck.id, roster: [ck.id, mike.id], total: '', cancelHours: 0 })).data.booking;
+  await reminderTick(Date.now(), async () => null); await wait(150);
+  const nudge = take(mike.id).find((m) => /start the scorecard/.test(m.body));
+  assert.ok(nudge && nudge.url === `/#/b/${tb.id}/score`, 'tee-time nudge opens scoring');
+  await reminderTick(Date.now() + 60000, async () => null); await wait(150);
+  assert.ok(!take(mike.id).some((m) => /start the scorecard/.test(m.body)), 'only once');
+
   server.close(); pushSrv.close();
   console.log('v3: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

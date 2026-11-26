@@ -190,6 +190,8 @@ function viewShots(id) {
       <div class="over" style="margin-bottom:8px">Club for this shot</div>
       <div class="clubs">${S.clubs.map((c) => `<button class="${c === club ? 'on' : ''}" data-act="t-club" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
       <button class="primary block" style="margin-top:12px;min-height:54px;font-size:16px" data-act="t-mark" data-club="${esc(club)}" ${holed ? 'disabled' : ''}>${icon('locate')} Mark ball here · ${esc(club)}</button>
+      ${T.pinAsk ? `<div class="note" style="margin-top:10px"><b>Holed out.</b> Putts after your last mark?<div class="seg" style="margin-top:8px">${[0, 1, 2, 3, 4].map((n) => `<button data-act="t-putts" data-v="${n}">${n}</button>`).join('')}</div>
+        <div class="tiny faint" style="margin-top:6px">Your score for the hole = marked shots + these. It goes straight onto the scorecard.</div></div>` : ''}
       <div class="row" style="margin-top:8px"><button class="grow outline" data-act="t-pin" ${pts.length ? '' : 'disabled'}>${icon('flag')} In the hole</button>
         <label class="btn grow outline" style="margin:0" ${pts.length ? '' : 'aria-disabled="true"'}>${icon('camera')} Photo<input type="file" accept="image/*" capture="environment" id="t-photo" hidden ${pts.length ? '' : 'disabled'}></label></div>
       <p class="tiny faint" style="margin:10px 0 0">Stand by your ball, pick the club you're about to hit, tap Mark. Distances are the straight line between marks, good to a few yards.</p>
@@ -366,7 +368,8 @@ Object.assign(handlers, {
   't-go-hole': (el, seg) => { const r = S.rounds.find((x) => x.id === Number(seg[1])); ui.hole[r.id] = Number(el.dataset.v) - r.startHole; T.suggest = null; T.club = null; render(); },
   't-club': (el) => { T.club = el.dataset.v; render(); },
   't-mark': async (el, seg) => markPoint(Number(seg[1]), 'shot', el.dataset.club),
-  't-pin': async (el, seg) => markPoint(Number(seg[1]), 'pin', ''),
+  't-pin': () => { T.pinAsk = !T.pinAsk; render(); },
+  't-putts': async (el, seg) => { T.pinAsk = false; await markPoint(Number(seg[1]), 'pin', '', Number(el.dataset.v)); },
   't-del': async (el) => { if (!confirm('Remove this mark?')) return; await api('DELETE', `/api/shots/${el.dataset.id}`); T.data.shots = T.data.shots.filter((s) => s.id !== Number(el.dataset.id)); render(); },
   'save-clubs': async () => { const list = $('#clubs-list').value.split(/[\s,]+/).filter(Boolean); const r = await api('PUT', '/api/gear/clubs', { clubs: list }); S.clubs = r.clubs; toast('Clubs saved'); render(); },
   'g-kind': (el) => { readGearInputs(); gearForm.data.kind = el.dataset.v; render(); },
@@ -383,7 +386,7 @@ Object.assign(handlers, {
   'g-del': async (el) => { if (!confirm('Delete this from your bag?')) return; await api('DELETE', `/api/gear/${el.dataset.id}`); await refresh(false); go('#/bag'); },
 });
 
-async function markPoint(roundId, kind, club) {
+async function markPoint(roundId, kind, club, putts) {
   if (T.busy) return;
   const r = S.rounds.find((x) => x.id === roundId);
   if (!T.pos) return toast('Waiting for GPS. Step outside of cover and give it a few seconds.');
@@ -392,14 +395,17 @@ async function markPoint(roundId, kind, club) {
   T.busy = true;
   try {
     const holeNo = r.startHole + holeIndex(r);
-    const x = await api('POST', `/api/rounds/${roundId}/shots`, { hole: holeNo, kind, club, lat: T.pos.lat, lon: T.pos.lon, acc: T.pos.acc, heading: T.heading, ts: Date.now() });
+    const x = await api('POST', `/api/rounds/${roundId}/shots`, { hole: holeNo, kind, club, putts, lat: T.pos.lat, lon: T.pos.lon, acc: T.pos.acc, heading: T.heading, ts: Date.now() });
+    if (x.round) { const i = S.rounds.findIndex((y) => y.id === roundId); if (i >= 0) S.rounds[i] = x.round; }
     if (kind === 'pin') T.data.shots = T.data.shots.filter((s) => !(s.userId === S.me.id && s.hole === holeNo && s.kind === 'pin'));
     T.data.shots.push(x.shot);
     const L = layout(holeNo);
     if (kind === 'pin' && !L?.green) T.data.holes.push({ hole: holeNo, tee: null, green: { lat: T.pos.lat, lon: T.pos.lon }, source: 'you' });
     if (navigator.vibrate) navigator.vibrate(30);
     T.club = null;
-    toast(kind === 'pin' ? 'Holed. Nice.' : `Marked · ${club}`);
+    toast(kind === 'pin' ? (x.round ? `Holed · ${x.round.scores.find((s) => s.userId === S.me.id).strokes[holeNo - r.startHole]} on the card` : 'Holed') : `Marked · ${club}`);
+    // On to the next hole once this one's in.
+    if (kind === 'pin' && holeIndex(r) < r.holes - 1) { ui.hole[r.id] = holeIndex(r) + 1; T.lastFit = null; }
     render();
   } finally { T.busy = false; }
 }

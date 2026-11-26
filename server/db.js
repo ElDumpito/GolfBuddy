@@ -57,9 +57,9 @@ addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], 
   // L.A. City Player Card: whether they have one (it moves twilight pricing an hour earlier), and the
   // card number and renewal date kept for safe keeping (only shown to the card's owner).
   ['card', 'INTEGER DEFAULT 1'], ['card_no', 'TEXT'], ['card_exp', 'TEXT'], ['card_reminded', 'TEXT'],
-  ['theme', 'TEXT']]);
+  ['theme', 'TEXT'], ['hcp', 'REAL']]);
 // wake: NULL = automatic (on for tee times before 8 a.m.), 0 = off, 1 = on. wake_log: what the caller did, per person.
-addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT'],
+addColumns('bookings', [['wake', 'INTEGER'], ['wake_log', 'TEXT'], ['tee_nudged', 'INTEGER DEFAULT 0'],
   // ride: walk | push | cart. price_auto: the total comes from the course's published rates.
   // balance_by: who paid what was left at the course (total minus deposit). wx: last weather alert sent.
   ['ride', "TEXT DEFAULT 'walk'"], ['price_auto', 'INTEGER DEFAULT 0'], ['balance_by', 'INTEGER'], ['wx', 'TEXT']]);
@@ -109,7 +109,7 @@ function checkPassword(pw, stored) {
 const pubUser = (u) => u && { id: u.id, username: u.username, name: u.name || u.username, venmo: u.venmo || '', admin: !!u.is_admin, tee: u.tee || '', card: u.card !== 0 };
 // The private part of a profile: only ever sent to that person.
 const ownProfile = (u) => u && ({ ...pubUser(u), phone: u.phone || '', home: u.home || '', homeSet: u.home_lat != null, arriveMins: u.arrive_mins ?? 30, wakeOk: !!u.wake_ok,
-  cardNo: u.card_no || '', cardExp: u.card_exp || '', theme: u.theme || 'augusta' });
+  cardNo: u.card_no || '', cardExp: u.card_exp || '', theme: u.theme || 'augusta', hcp: u.hcp ?? null });
 const bookingRow = (b) => b && ({
   id: b.id, courseId: b.course_id, course: b.course, address: b.address || '', teeAt: b.tee_at, players: b.players, holes: b.holes,
   bookerId: b.booker_id, confirmation: b.confirmation || '', total: b.total, deposit: b.deposit, cancelAt: b.cancel_at,
@@ -199,6 +199,9 @@ const api = {
   setBalanceBy: (id, uid) => q('UPDATE bookings SET balance_by=? WHERE id=?').run(uid || null, id),
   wxState: (id) => json(q('SELECT wx FROM bookings WHERE id=?').get(id)?.wx, null),
   setWxState: (id, v) => q('UPDATE bookings SET wx=? WHERE id=?').run(JSON.stringify(v), id),
+  setHcp: (id, h) => q('UPDATE users SET hcp=? WHERE id=?').run(h, id),
+  teeNudgesDue: (now) => q("SELECT * FROM bookings WHERE status='active' AND tee_nudged=0 AND tee_at BETWEEN ? AND ?").all(now - 3600000, now + 15 * 60000).map((b) => ({ ...bookingRow(b), roster: api.roster(b.id) })),
+  markTeeNudged: (id) => q('UPDATE bookings SET tee_nudged=1 WHERE id=?').run(id),
   setTheme: (id, t) => q('UPDATE users SET theme=? WHERE id=?').run(t, id),
   setCard: (id, c) => q('UPDATE users SET card=?, card_no=?, card_exp=? WHERE id=?').run(c.card ? 1 : 0, c.cardNo || null, c.cardExp || null, id),
   markCardReminded: (id, exp) => q('UPDATE users SET card_reminded=? WHERE id=?').run(exp, id),

@@ -186,7 +186,7 @@ function viewTeeTimes() {
   return frame({
     wordmark: true, tab: 'tee', right: balanceChip(),
     body: `${pushHint}
-    ${next ? `<a class="card hero" href="#/b/${next.id}">
+    ${next && roundDay(next) ? roundDayHero(next, br) : next ? `<a class="card hero" href="#/b/${next.id}">
       <div class="row"><span class="over grow">Next up · ${esc(until(next.teeAt))}</span>${deadlinePill(next)}</div>
       <div class="course">${esc(next.course)}</div>
       <div class="when">${fLongDay(next.teeAt)} at ${fTime(next.teeAt)}</div>
@@ -201,6 +201,37 @@ function viewTeeTimes() {
     ${past.length ? `<section class="card"><div class="card-head"><h2>Past &amp; cancelled</h2><button class="quiet chip" data-act="toggle-past">${ui.showPast ? 'Hide' : `Show ${past.length}`}</button></div>
       ${ui.showPast ? `<div class="list">${past.slice(0, 40).map(teeRow).join('')}</div>` : ''}</section>` : ''}`,
   });
+}
+
+// --- round day: from 2 hours before tee time until the round should be over, the home screen is the scorecard ---
+const roundDay = (b) => Date.now() > b.teeAt - 2 * HOUR && Date.now() < b.teeAt + (b.holes === 9 ? 3 : 6) * HOUR;
+function roundDayHero(b, br) {
+  const round = S.rounds.find((r) => r.bookingId === b.id);
+  const c = courseOf(b);
+  checkHere(c);
+  const here = ui.here && ui.here.courseId === c.id && ui.here.near;
+  return `<section class="card hero">
+    <div class="row"><span class="over grow">${b.teeAt > Date.now() ? `Tee time · ${esc(until(b.teeAt))}` : 'Round in progress'}</span>${here ? '<span class="pill ok">You’re here</span>' : ''}</div>
+    <div class="course">${esc(b.course)}</div>
+    <div class="when">${fTime(b.teeAt)}${br?.weather?.at ? ` · ${br.weather.at.temp}°, ${esc(br.weather.at.sky.toLowerCase())}` : ''}</div>
+    ${round ? `<div style="margin-top:14px;position:relative;z-index:1">${roundSummary(round)}</div>` : ''}
+    <div class="row" style="margin-top:16px;position:relative;z-index:1">
+      ${round ? `<a class="btn primary grow" href="#/r/${round.id}">${icon('card')} Scorecard</a><a class="btn grow" href="#/r/${round.id}/shots">${icon('target')} Shots</a>`
+        : `<button class="primary grow" style="min-height:52px" data-act="start-round" data-id="${b.id}">${icon('card')} Start scoring</button>`}
+    </div>
+    <a class="tiny" href="#/b/${b.id}" style="display:block;margin-top:10px;position:relative;z-index:1">Tee time details ›</a></section>`;
+}
+// When the app is opened on round day, check (without asking) whether you're at the course.
+function checkHere(c) {
+  if (!c?.lat || ui.here?.courseId === c.id && Date.now() - ui.here.at < 5 * MIN) return;
+  ui.here = { courseId: c.id, at: Date.now(), near: false };
+  navigator.permissions?.query({ name: 'geolocation' }).then((p) => {
+    if (p.state !== 'granted') return;
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const d = Math.hypot((pos.coords.latitude - c.lat) * 111, (pos.coords.longitude - c.lon) * 111 * Math.cos(c.lat * Math.PI / 180));
+      ui.here.near = d < 0.6; if (ui.here.near && !busyForm()) render();
+    }, () => {}, { maximumAge: 60000, timeout: 10000 });
+  }).catch(() => {});
 }
 
 // --- the brief sections on a tee time ---
@@ -686,8 +717,7 @@ function viewRound(id) {
       <tr><td>Par</td>${r.pars.map((p, k) => `<td class="faint">${p}</td>${split18 && k === 8 ? `<td class="sum faint">${sum(r.pars, 0, 9)}</td>` : ''}`).join('')}${split18 ? `<td class="sum faint">${sum(r.pars, 9, 18)}</td>` : ''}<td class="sum faint">${sum(r.pars, 0, r.holes)}</td></tr>
       ${sc.map((s) => `<tr><td>${esc(first(s.userId))}</td>${r.pars.map((_, k) => cell(s, k) + (split18 && k === 8 ? `<td class="sum">${sum(s.strokes, 0, 9)}</td>` : '')).join('')}${split18 ? `<td class="sum">${sum(s.strokes, 9, 18)}</td>` : ''}<td class="sum">${sum(s.strokes, 0, r.holes)}</td></tr>`).join('')}
     </table><div style="margin-top:12px">${roundSummary(r)}</div></section>
-    <section class="card"><h2>Post to GHIN</h2><p class="small-text dim" style="margin-top:0">GHIN doesn't let personal apps post scores, so this copies your hole-by-hole scores to paste or read off in the GHIN app.</p>
-      <div class="row"><button class="outline" data-act="ghin-copy" data-id="${r.id}">${icon('copy', 'sm')} Copy my scores</button><a class="btn outline" href="https://www.ghin.com/" target="_blank" rel="noopener">Open GHIN</a></div></section>
+    <a class="card link-row" href="#/r/${r.id}/post"><span class="ic">${icon('flag')}</span><span class="grow"><b>Post to GHIN</b><div class="small-text dim">Your adjusted score, hole by hole, ready to enter</div></span><span class="faint">${icon('chev')}</span></a>
     <button class="quiet danger" data-act="del-round" data-id="${r.id}">Delete this scorecard</button>`,
   });
 }
@@ -696,6 +726,7 @@ function saveRoundSoon(r, payload) {
   clearTimeout(ui.saving[r.id]);
   ui.saving[r.id] = setTimeout(async () => {
     try { const x = await api('PUT', `/api/rounds/${r.id}`, payload()); Object.assign(r, x.round); } catch (e) { toast(e.message); }
+    ui.saving[r.id] = null;
   }, 500);
 }
 
@@ -709,6 +740,70 @@ function applyTheme(t) {
 }
 const themePicker = () => `<section class="card"><h2>Look</h2><div class="swatches">${THEMES.map(([k, l]) => `<button class="swatch ${(S.me.theme || 'augusta') === k ? 'on' : ''}" data-act="theme" data-v="${k}"><i class="sw-${k}"></i><span>${l}</span></button>`).join('')}</div></section>`;
 
+// ---------- posting to GHIN ----------
+// World Handicap System: each hole counts for at most net double bogey (par + 2 + any strokes you get
+// there); with no Handicap Index yet, at most par + 5. Course handicap = index × slope / 113 + (rating − par).
+function postingCalc(r, userId, teeName) {
+  const c = S.courses.find((x) => x.id === r.courseId);
+  const info = c?.info;
+  const s = r.scores.find((x) => x.userId === userId);
+  const u = userId === S.me.id ? S.me : user(userId);
+  const index = userId === S.me.id ? S.me.hcp : null;
+  const tee = info?.tees?.find((t) => t.name === teeName) || info?.tees?.[Math.min(1, (info?.tees?.length || 1) - 1)];
+  const nine = r.holes === 9;
+  const holes = r.pars.map((par, k) => ({ no: r.startHole + k, par, hcp: info?.holes?.[r.startHole - 1 + k]?.hcp ?? k + 1, strokes: s?.strokes[k] || null }));
+  const par = holes.reduce((a, h) => a + h.par, 0);
+  const rating = tee ? (nine && info.holes.length === 18 ? tee.rating / 2 : nine ? tee.rating / 2 : tee.rating) : null;
+  const slope = tee?.slope || null;
+  let ch = null;
+  if (index != null && rating != null) ch = Math.round((nine ? index / 2 : index) * (slope / 113) + (rating - par));
+  // Strokes received per hole: the hardest holes first (lowest handicap number).
+  const order = [...holes].sort((a, b) => a.hcp - b.hcp);
+  for (const h of holes) h.get = 0;
+  if (ch != null) {
+    if (ch >= 0) for (let i = 0; i < ch; i++) order[i % order.length].get++;
+    else for (let i = 0; i < -ch; i++) order[order.length - 1 - (i % order.length)].get--;
+  }
+  for (const h of holes) {
+    h.max = ch != null ? h.par + 2 + h.get : h.par + 5;
+    h.adj = h.strokes ? Math.min(h.strokes, h.max) : null;
+  }
+  const done = holes.every((h) => h.strokes);
+  const gross = holes.reduce((a, h) => a + (h.strokes || 0), 0), ags = holes.reduce((a, h) => a + (h.adj || 0), 0);
+  const diff = done && !nine && rating != null ? Math.round(((113 / slope) * (ags - rating)) * 10) / 10 : null;
+  return { u, tee, index, ch, holes, par, gross, ags, done, diff, rating, slope, info };
+}
+function viewPost(id) {
+  const r = S.rounds.find((x) => x.id === id);
+  if (!r) return frame({ title: 'Post to GHIN', back: '#/scores', tab: 'scores', body: '<div class="card empty">That scorecard isn’t here any more.</div>' });
+  if (!r.scores.some((s) => s.userId === S.me.id)) return frame({ title: 'Post to GHIN', back: `#/r/${id}`, tab: 'scores', body: '<div class="card empty">You’re not on this card.</div>' });
+  const c = S.courses.find((x) => x.id === r.courseId) || {};
+  const teeName = ui.tee[c.id] || (c.info?.tees?.find((t) => t.name.toLowerCase() === (S.me.tee || '').toLowerCase()) || c.info?.tees?.[Math.min(1, (c.info?.tees?.length || 1) - 1)])?.name;
+  const p = postingCalc(r, S.me.id, teeName);
+  return frame({
+    title: 'Post to GHIN', back: `#/r/${id}`, tab: 'scores',
+    body: `<section class="card">
+      <div class="over">${esc(r.course)} · ${fDay(r.playedOn)}${p.tee ? ` · ${esc(p.tee.name)} tees` : ''}</div>
+      <div class="row" style="margin-top:10px">
+        <div class="grow"><div class="over">Adjusted gross</div><div class="big num">${p.done ? p.ags : '–'}</div></div>
+        <div class="grow"><div class="over">Gross</div><div class="big num">${p.gross || '–'}</div></div>
+        <div class="grow"><div class="over">Course hcp</div><div class="big num">${p.ch ?? '–'}</div></div>
+      </div>
+      ${p.diff != null ? `<div class="small-text dim" style="margin-top:8px">Score differential about <b class="num">${p.diff}</b> (${p.rating} / ${p.slope}). GHIN works out the official one.</div>` : ''}
+      ${p.index == null ? `<div class="note" style="margin-top:12px">No Handicap Index in <a href="#/me">Me</a>, so each hole is capped at par + 5, the rule for golfers without an index.</div>` : ''}
+      ${!p.done ? `<div class="note warn-note" style="margin-top:12px">Some holes have no score yet.</div>` : ''}
+      ${p.info?.tees?.length ? `<div class="tees" style="margin-top:12px">${p.info.tees.map((t) => `<button class="${t.name === p.tee?.name ? 'on' : ''}" data-act="pick-tee" data-c="${c.id}" data-v="${esc(t.name)}"><span>${teeDot(t.name)}${esc(t.name)}</span><b class="num">${t.rating}/${t.slope}</b></button>`).join('')}</div>` : ''}
+    </section>
+    <section class="card cardtbl"><table>
+      <tr><th>Hole</th><th>Par</th><th>Hcp</th><th>Score</th><th>Max</th><th class="sum">Post</th></tr>
+      ${p.holes.map((h) => `<tr><td>${h.no}</td><td class="faint">${h.par}</td><td class="faint">${h.hcp}${h.get > 0 ? ` <span class="brass">${'•'.repeat(h.get)}</span>` : ''}</td><td>${h.strokes || '<span class="faint">·</span>'}</td><td class="faint">${h.max}</td><td class="sum ${h.adj != null && h.adj < (h.strokes || 0) ? 'brass' : ''}">${h.adj ?? ''}</td></tr>`).join('')}
+    </table><div class="tiny faint" style="margin-top:8px">Dots: strokes you get on that hole. Gold numbers were capped.</div></section>
+    <section class="card"><h2>In the GHIN app</h2>
+      <ol class="small-text dim" style="margin:0 0 12px;padding-left:18px"><li>Post Score › pick ${esc(r.course)} and the ${esc(p.tee?.name || 'right')} tees.</li><li>Choose <b>Hole-by-Hole</b> and enter the Score column; GHIN applies the same caps.</li></ol>
+      <div class="row"><button class="outline grow" data-act="ghin-copy" data-id="${r.id}">${icon('copy', 'sm')} Copy scores</button><a class="btn primary grow" href="https://www.ghin.com/" target="_blank" rel="noopener">Open GHIN</a></div></section>`,
+  });
+}
+
 // ---------- me ----------
 function viewMe() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
@@ -719,6 +814,7 @@ function viewMe() {
     body: `${themePicker()}<section class="card" id="mf"><h2>Profile</h2>
       <label for="m-name">Name</label><input id="m-name" value="${esc(me.name)}">
       <label for="m-venmo">Venmo username</label><input id="m-venmo" value="${esc(me.venmo)}" placeholder="without the @" autocapitalize="off">
+      <label for="m-hcp">Handicap Index <span class="faint">(for posting scores; leave blank if you don't have one)</span></label><input id="m-hcp" inputmode="decimal" value="${me.hcp ?? ''}" placeholder="e.g. 14.2, or +1.5">
       <label for="m-tee">Tees you usually play</label><select id="m-tee"><option value="">No preference</option>${teeNames.map((t) => `<option ${t === me.tee ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
       <div class="over" style="margin:20px 0 2px">Getting there</div>
       <label for="m-home">Home address <span class="faint">(only you see it; used for “leave by” times)</span></label><input id="m-home" value="${esc(me.home)}" placeholder="Street, city, ZIP" autocomplete="street-address">
@@ -814,11 +910,13 @@ function render() {
   const id = Number(seg[1]);
   let html;
   if (seg[0] === 'b' && seg[2] === 'edit') html = viewForm(id);
+  else if (seg[0] === 'b' && seg[2] === 'score') { html = viewBooking(id); setTimeout(() => openScoring(id), 0); }
   else if (seg[0] === 'b') html = viewBooking(id);
   else if (seg[0] === 'new') html = viewForm(null);
   else if (seg[0] === 'money' && seg[1] === 'add') html = viewAddExpense(q);
   else if (seg[0] === 'money' || seg[0] === 'ledger') html = viewMoney();
   else if (seg[0] === 'scores') html = viewScores();
+  else if (seg[0] === 'r' && seg[2] === 'post') html = viewPost(id);
   else if (seg[0] === 'r' && seg[2] && extraViews[seg[2]]) html = extraViews[seg[2]](id, q);
   else if (seg[0] === 'r') html = viewRound(id);
   else if (seg[0] === 'me') html = viewMe();
@@ -971,7 +1069,7 @@ document.addEventListener('click', async (e) => {
       case 'theme': S.me.theme = v; applyTheme(v); render(); api('POST', '/api/me/theme', { theme: v }).catch(() => {}); break;
       case 'save-me': {
         const wakeOk = $('[data-act="me-wake"]').classList.contains('on');
-        await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, home: $('#m-home').value, phone: $('#m-phone').value,
+        await api('POST', '/api/me', { name: $('#m-name').value, venmo: $('#m-venmo').value, tee: $('#m-tee').value, hcp: $('#m-hcp').value.trim(), home: $('#m-home').value, phone: $('#m-phone').value,
           arriveMins: Number($('#m-arrive').value || 30), wakeOk, card: $('[data-act="me-card"]').classList.contains('on'), cardNo: $('#m-cardno').value, cardExp: $('#m-cardexp').value });
         ui.briefs = {}; await refresh(); toast('Saved'); break;
       }
@@ -1023,6 +1121,31 @@ async function enablePush() {
 async function syncPush() {
   try { if (S && 'Notification' in window && Notification.permission === 'granted') { const reg = await swReady(); if (reg) await subscribe(reg); } else await swReady(); } catch { /* not fatal */ }
 }
+
+// From the tee-time notification: open the group's card, starting one if needed.
+async function openScoring(bookingId) {
+  if (ui.opening) return; ui.opening = true;
+  try {
+    const existing = S.rounds.find((r) => r.bookingId === bookingId);
+    if (existing) return go(`#/r/${existing.id}`);
+    const b = S.bookings.find((x) => x.id === bookingId);
+    if (b) await startRound({ bookingId: b.id, holes: b.holes, startHole: /back 9/i.test(b.notes) ? 10 : 1, players: b.roster.filter((r) => r.rsvp !== 'out').map((r) => r.userId), playedOn: b.teeAt });
+  } finally { ui.opening = false; }
+}
+// During a round, everyone's scores refresh every few seconds instead of once a minute.
+setInterval(async () => {
+  const { seg } = route();
+  if (!S || seg[0] !== 'r' || document.visibilityState !== 'visible') return;
+  const id = Number(seg[1]);
+  if (ui.saving[id]) return; // our own change is on its way; don't overwrite it
+  try {
+    const { round } = await api('GET', `/api/rounds/${id}`);
+    const i = S.rounds.findIndex((x) => x.id === id);
+    if (i < 0 || JSON.stringify(S.rounds[i]) === JSON.stringify(round)) return;
+    S.rounds[i] = round;
+    if (!busyForm() && seg[2] !== 'shots') render();
+  } catch { /* offline */ }
+}, 5000);
 
 // ---------- start ----------
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });

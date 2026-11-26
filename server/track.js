@@ -236,7 +236,21 @@ async function handle(req, res, url, me, body, { send, bad, readBody }) {
         .run(id, me.id, hole, seq, kind, lat, lon, num(body.acc), String(body.club || '').slice(0, 12), num(body.heading), Number(body.ts) || Date.now()).lastInsertRowid);
       if (seq === 1 && kind === 'shot' && (num(body.acc) ?? 99) <= 25) learn(r.courseId, hole, 'tee', { lat, lon });
       if (kind === 'pin' && (num(body.acc) ?? 99) <= 25) learn(r.courseId, hole, 'green', { lat, lon });
-      return send(res, 200, { shot: shotRow(q('SELECT * FROM shots WHERE id=?').get(sid)) });
+      // Holing out fills in the scorecard: every marked shot is a stroke, plus any putts after the last mark.
+      let round;
+      if (kind === 'pin' && body.putts != null) {
+        const putts = Math.max(0, Math.min(6, Math.round(Number(body.putts)) || 0));
+        const n = q("SELECT COUNT(*) c FROM shots WHERE round_id=? AND user_id=? AND hole=? AND kind='shot' AND deleted=0").get(id, me.id, hole).c;
+        const k = hole - r.startHole;
+        if (k >= 0 && k < r.holes && n + putts >= 1) {
+          const mine = r.scores.find((x) => x.userId === me.id)?.strokes || [];
+          const strokes = Array.from({ length: Math.max(mine.length, k + 1) }, (_, i) => mine[i] ?? null);
+          strokes[k] = Math.min(20, n + putts);
+          db.setScores(id, me.id, strokes);
+          round = db.roundById(id);
+        }
+      }
+      return send(res, 200, { shot: shotRow(q('SELECT * FROM shots WHERE id=?').get(sid)), round });
     }
   }
   if (seg[1] === 'rounds' && seg[3] === 'gear' && m === 'PUT') {

@@ -113,3 +113,6 @@ Anyone who reaches the site can create an account with a username and password, 
 approves it: admins get a push notification with Approve / Decline buttons (or use the list at the top of Me). A waiting
 account can't log in. Declining deletes it. At most 10 can wait at once. The invite code (Me › Admin) skips the wait for
 someone you've already said yes to. The very first account on a fresh install is the admin.
+
+On golf.juno.nexus, Cloudflare Access still sits in front: its "GolfHomie sign-ups (anyone with an email)" policy lets anyone
+through after a one-time email code, so bots never reach the app, and the app's own approval decides who gets in.

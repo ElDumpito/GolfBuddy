@@ -879,7 +879,7 @@ function homiesCard() {
   const homies = S.users.filter((u) => u.homie);
   return `<section class="card"><div class="card-head"><h2>Homies</h2><button class="chip" data-act="homie-qr">${icon('card', 'sm')} My code</button><button class="chip" data-act="homie-scan">${icon('camera', 'sm')} Scan</button></div>
     ${ui.qr ? `<div style="text-align:center;margin:4px 0 12px"><div id="qrbox" style="display:inline-block;background:#fff;padding:12px;border-radius:16px">${ui.qr}</div>
-      <div class="tiny faint" style="margin-top:8px">Have them scan this with their camera or GolfHomie. Someone new can sign up from it without the invite code${location.hostname.includes('juno.nexus') ? ', once you’ve added their email to the Cloudflare login list' : ''}.</div>
+      <div class="tiny faint" style="margin-top:8px">Have them scan this with their camera or GolfHomie. Someone new can sign up from it too; you’ll get a notification to approve them.</div>
       <button class="chip" style="margin-top:6px" data-act="homie-newcode">New code</button></div>` : ''}
     <div id="scanbox"></div>
     <div class="list">${homies.length ? homies.map((u) => `<div class="line"><span class="grow"><b>${esc(u.name)}</b> <span class="tiny faint">@${esc(u.username)}</span></span><button class="x" data-act="homie-drop" data-id="${u.id}" aria-label="Remove">✕</button></div>`).join('') : '<div class="empty">No Homies yet. Show your code or scan theirs.</div>'}</div></section>`;

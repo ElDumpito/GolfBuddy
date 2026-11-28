@@ -10,7 +10,7 @@ self.addEventListener('push', (e) => {
     body: m.body || '', tag: m.tag, renotify: !!m.tag, requireInteraction: !!m.requireInteraction,
     icon: '/icons/icon-192.png', badge: '/icons/badge-96.png',
     actions: (m.actions || []).slice(0, 2),
-    data: { url: m.url || '/', bookingId: m.bookingId || null },
+    data: { url: m.url || '/', bookingId: m.bookingId || null, signupId: m.signupId || null },
   }));
 });
 
@@ -32,6 +32,17 @@ self.addEventListener('notificationclick', (e) => {
     }).then((r) => {
       if (!r.ok) throw new Error(r.status);
       return self.registration.showNotification(e.action === 'in' ? "✅ You're in" : "❌ You're out", { body: 'Your homies know.', tag: n.tag, icon: '/icons/icon-192.png', badge: '/icons/badge-96.png' });
+    }).catch(() => openApp(d.url)));
+    return;
+  }
+  if ((e.action === 'approve' || e.action === 'decline') && d.signupId) {
+    // An admin approving or declining a new sign-up right from the notification.
+    e.waitUntil(fetch(`/api/admin/signups/${d.signupId}`, {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approve: e.action === 'approve' }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(r.status);
+      const x = await r.json();
+      return self.registration.showNotification(x.approved ? `✅ ${x.name} is in` : `${x.name} was declined`, { body: x.approved ? 'They can log in now.' : 'Their account was removed.', tag: n.tag, icon: '/icons/icon-192.png', badge: '/icons/badge-96.png' });
     }).catch(() => openApp(d.url)));
     return;
   }

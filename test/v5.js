@@ -32,8 +32,13 @@ const { server } = require('../server/index');
 
   // Tammer signs up from CK's QR code: no invite code needed, and he's CK's Homie (not Mike's).
   const code = (await call('ck', 'GET', '/api/homies/code')).data.code;
-  assert.strictEqual((await call('tam', 'POST', '/api/register', { username: 'tam', password: 'secret1', name: 'Tammer', homie: 'bogus' })).status, 403);
-  const tam = (await reg('tam', 'Tammer', { homie: code })).me;
+  // Tammer signs up from CK's code: he waits for approval, then he's linked with CK.
+  assert.deepStrictEqual(await reg('tam', 'Tammer', { homie: code }), { pending: true });
+  assert.strictEqual((await call('tam', 'POST', '/api/login', { username: 'tam', password: 'secret1' })).status, 403);
+  const waiting = (await call('ck', 'GET', '/api/admin/signups')).data.signups;
+  assert.strictEqual(waiting[0].viaName, 'CK');
+  await call('ck', 'POST', `/api/admin/signups/${waiting[0].id}`, { approve: true });
+  const tam = (await call('tam', 'POST', '/api/login', { username: 'tam', password: 'secret1' })).data.me;
   assert.ok((await st('tam')).users.some((u) => u.id === ck.id && u.homie));
   assert.ok(!(await st('tam')).users.some((u) => u.id === mike.id), "Tammer doesn't see Mike");
   assert.ok(!(await st('mike')).users.some((u) => u.id === tam.id), "Mike doesn't see Tammer");
@@ -67,7 +72,8 @@ const { server } = require('../server/index');
   assert.strictEqual((await call('ck', 'GET', `/api/rounds/${round.id}`)).data.round.scores.find((s) => s.userId === tam.id).strokes[0], 4);
   // A fresh code retires the old one.
   await call('ck', 'POST', '/api/homies/code', { fresh: true });
-  assert.strictEqual((await call('x', 'POST', '/api/register', { username: 'newguy', password: 'secret1', homie: code })).status, 403);
+  await call('x', 'POST', '/api/register', { username: 'newguy', password: 'secret1', homie: code });
+  assert.strictEqual((await call('ck', 'GET', '/api/admin/signups')).data.signups.find((u) => u.username === 'newguy').via, null, 'old code links nobody');
   // Unlinking hides them again (past shared things stay visible).
   await call('tam', 'DELETE', `/api/homies/${mike.id}`);
   assert.ok(!(await st('tam')).users.find((u) => u.id === mike.id)?.homie);

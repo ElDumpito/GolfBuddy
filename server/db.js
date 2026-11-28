@@ -59,9 +59,12 @@ addColumns('users', [['phone', 'TEXT'], ['home', 'TEXT'], ['home_lat', 'REAL'], 
   // L.A. City Player Card: whether they have one (it moves twilight pricing an hour earlier), and the
   // card number and renewal date kept for safe keeping (only shown to the card's owner).
   ['card', 'INTEGER DEFAULT 1'], ['card_no', 'TEXT'], ['card_exp', 'TEXT'], ['card_reminded', 'TEXT'],
-  ['theme', 'TEXT'], ['hcp', 'REAL'], ['fwd', 'TEXT'], ['homie_code', 'TEXT']]);
-// Everyone who used the app before Homies existed already played together: link them all once.
-if (!q('SELECT COUNT(*) c FROM homies').get().c) {
+  ['theme', 'TEXT'], ['hcp', 'REAL'], ['fwd', 'TEXT'], ['homie_code', 'TEXT'],
+  // status: 'active', or 'pending' until an admin approves the sign-up. via: whose QR code they signed up from.
+  ['status', "TEXT DEFAULT 'active'"], ['via', 'INTEGER']]);
+// Everyone who used the app before Homies existed already played together: link them all, once.
+if (!q("SELECT v FROM settings WHERE k='homies_linked'").get()) {
+  q("INSERT OR REPLACE INTO settings(k, v) VALUES('homies_linked', '1')").run();
   const ids = q('SELECT id FROM users ORDER BY id').all().map((u) => u.id);
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) q('INSERT OR IGNORE INTO homies(a, b, created) VALUES(?,?,?)').run(ids[i], ids[j], Date.now());
 }
@@ -140,11 +143,16 @@ const api = {
   userCount: () => q('SELECT COUNT(*) c FROM users').get().c,
   userByName: (n) => q('SELECT * FROM users WHERE username=?').get(n),
   userById: (id) => q('SELECT * FROM users WHERE id=?').get(id),
-  users: () => q('SELECT * FROM users ORDER BY id').all().map(pubUser),
-  createUser(username, pw, name, admin) {
-    const r = q('INSERT INTO users(username, pass, name, is_admin, created) VALUES(?,?,?,?,?)').run(username, hashPassword(pw), name || username, admin ? 1 : 0, Date.now());
+  users: () => q("SELECT * FROM users WHERE status='active' ORDER BY id").all().map(pubUser),
+  createUser(username, pw, name, admin, pending = false, via = null) {
+    const r = q('INSERT INTO users(username, pass, name, is_admin, created, status, via) VALUES(?,?,?,?,?,?,?)')
+      .run(username, hashPassword(pw), name || username, admin ? 1 : 0, Date.now(), pending ? 'pending' : 'active', via);
     return api.userById(Number(r.lastInsertRowid));
   },
+  // Sign-ups waiting for an admin. Declining removes the account (and frees the username).
+  pendingUsers: () => q("SELECT id, username, name, via, created FROM users WHERE status='pending' ORDER BY id").all(),
+  approveUser: (id) => q("UPDATE users SET status='active' WHERE id=? AND status='pending'").run(id).changes,
+  declineUser: (id) => q("DELETE FROM users WHERE id=? AND status='pending'").run(id).changes,
   setProfile: (id, name, venmo) => q('UPDATE users SET name=?, venmo=? WHERE id=?').run(name, venmo || null, id),
   setTravel: (id, t) => q('UPDATE users SET phone=?, home=?, home_lat=?, home_lon=?, arrive_mins=?, wake_ok=?, tee=? WHERE id=?')
     .run(t.phone || null, t.home || null, t.homeLat ?? null, t.homeLon ?? null, t.arriveMins, t.wakeOk ? 1 : 0, t.tee || null, id),
@@ -154,7 +162,7 @@ const api = {
     q('INSERT INTO sessions(token, user_id, created) VALUES(?,?,?)').run(token, userId, Date.now());
     return token;
   },
-  sessionUser: (t) => (t ? q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?').get(t) || null : null),
+  sessionUser: (t) => (t ? q("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND u.status='active'").get(t) || null : null),
   dropSession: (t) => q('DELETE FROM sessions WHERE token=?').run(t),
   dropUserSessions: (id) => q('DELETE FROM sessions WHERE user_id=?').run(id),
 
@@ -223,7 +231,7 @@ const api = {
   setTheme: (id, t) => q('UPDATE users SET theme=? WHERE id=?').run(t, id),
   setCard: (id, c) => q('UPDATE users SET card=?, card_no=?, card_exp=? WHERE id=?').run(c.card ? 1 : 0, c.cardNo || null, c.cardExp || null, id),
   markCardReminded: (id, exp) => q('UPDATE users SET card_reminded=? WHERE id=?').run(exp, id),
-  allUsersRaw: () => q('SELECT * FROM users').all(),
+  allUsersRaw: () => q("SELECT * FROM users WHERE status='active'").all(),
   setWake: (id, v) => q('UPDATE bookings SET wake=? WHERE id=?').run(v == null ? null : v ? 1 : 0, id),
   wakeLog: (id) => json(q('SELECT wake_log FROM bookings WHERE id=?').get(id)?.wake_log, {}),
   setWakeLog: (id, log) => q('UPDATE bookings SET wake_log=? WHERE id=?').run(JSON.stringify(log), id),

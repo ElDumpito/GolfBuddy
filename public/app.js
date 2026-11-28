@@ -922,7 +922,7 @@ function viewMe() {
   const teeNames = [...new Set(S.courses.flatMap((c) => c.info?.tees?.map((t) => t.name.split('/')[0]) || []))];
   return frame({
     title: 'Me', tab: 'me',
-    body: `${themePicker()}${homiesCard()}<section class="card" id="mf"><h2>Profile</h2>
+    body: `${pendingCard()}${themePicker()}${homiesCard()}<section class="card" id="mf"><h2>Profile</h2>
       <label for="m-name">Name</label><input id="m-name" value="${esc(me.name)}">
       <label for="m-venmo">Venmo username</label><input id="m-venmo" value="${esc(me.venmo)}" placeholder="without the @" autocapitalize="off">
       <label for="m-hcp">Handicap Index <span class="faint">(for posting scores; leave blank if you don't have one)</span></label><input id="m-hcp" inputmode="decimal" value="${me.hcp ?? ''}" placeholder="e.g. 14.2, or +1.5">
@@ -958,13 +958,21 @@ function viewMe() {
     <button class="quiet" data-act="logout">Log out</button>`,
   });
 }
+// New sign-ups waiting for an admin, at the top of Me (where the push notification lands).
+function pendingCard() {
+  if (!S.me.admin) return '';
+  if (!ui.signups) api('GET', '/api/admin/signups').then((r) => { ui.signups = r.signups; if (r.signups.length) render(); }).catch(() => {});
+  const W = ui.signups || [];
+  return W.length ? `<section class="card"><h2>Waiting for approval</h2><div class="list">${W.map((u) => `<div class="line"><span class="grow"><b>${esc(u.name)}</b> <span class="tiny faint">@${esc(u.username)}${u.viaName ? ` · from ${esc(u.viaName)}'s code` : ''} · ${fWhen(u.created)}</span></span>
+    <button class="chip" data-act="signup" data-id="${u.id}" data-v="1">Approve</button><button class="x" data-act="signup" data-id="${u.id}" data-v="0" aria-label="Decline">✕</button></div>`).join('')}</div></section>` : '';
+}
 function viewAdmin() {
   const K = ui.keys;
   if (!K) api('GET', '/api/admin/keys').then((r) => { ui.keys = r.keys; render(); }).catch(() => {});
   const row = (k, label, hint, type = 'text') => `<label for="k-${k}">${label} ${K?.[k] ? `<span class="pill ok">set ${esc(K[k])}</span>` : '<span class="pill">not set</span>'}</label>
     <input id="k-${k}" data-key="${k}" type="${type}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${K?.[k] ? 'Paste a new one to replace it' : esc(hint)}">`;
   return `<section class="card"><h2>Admin</h2>
-    <div class="kv"><span>Invite code</span><span><button class="chip" data-act="copy" data-v="${esc(S.invite)}">${esc(S.invite)} ${icon('copy', 'sm')}</button></span></div>
+    <div class="kv"><span>Invite code <span class="tiny faint">(skips approval)</span></span><span><button class="chip" data-act="copy" data-v="${esc(S.invite)}">${esc(S.invite)} ${icon('copy', 'sm')}</button></span></div>
     <div class="over" style="margin:20px 0 0">Service keys</div>
     <p class="tiny faint" style="margin:6px 0 0">Pasted here, stored on the NAS and never shown again (only the last 4 characters). Leave a box empty to keep what's there.</p>
     ${row('google_server_key', 'Google server key', 'Routes API + Places API (New)', 'password')}
@@ -1018,13 +1026,17 @@ function viewCourse(id) {
 // ---------- login ----------
 function viewAuth() {
   const reg = ui.authMode === 'register';
+  if (ui.signedUp) return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1>Golf<i class="brass">Homie</i></h1>
+    <p style="margin:18px 0 6px"><b>Thanks, ${esc(ui.signedUp)}.</b> Your account is waiting for approval.</p>
+    <p class="small-text dim" style="margin:0">Once you're approved, come back and log in with the username and password you just picked.</p>
+    <button class="outline block" style="margin-top:18px" data-act="auth-mode" data-v="login">Back to log in</button></main>`;
   return `<main class="auth card"><img class="logo" src="/icons/icon-192.png" alt=""><h1>Golf<i class="brass">Homie</i></h1>
     <div class="seg" style="margin:18px 0 4px"><button data-act="auth-mode" data-v="login" class="${reg ? '' : 'on'}">Log in</button><button data-act="auth-mode" data-v="register" class="${reg ? 'on' : ''}">Create account</button></div>
     <form id="authf"><label for="u">Username</label><input id="u" autocomplete="username" autocapitalize="off" required>
     ${reg ? '<label for="n">Your name</label><input id="n" placeholder="Mike">' : ''}
     <label for="pw">Password</label><input id="pw" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required>
-    ${reg && !ui.homieCode ? '<label for="inv">Invite code</label><input id="inv" autocapitalize="off" required>' : ''}
-    ${reg && ui.homieCode ? '<p class="tiny faint" style="margin:10px 0 0">You were invited by a Homie, so no invite code needed.</p>' : ''}
+    ${reg ? (ui.showInvite ? '<label for="inv">Invite code</label><input id="inv" autocapitalize="off">'
+      : `<p class="tiny faint" style="margin:10px 0 0">${ui.homieCode ? 'You’ll be linked with the Homie whose code you scanned. ' : ''}New accounts are approved by the admin. <a href="#" data-act="auth-invite" style="color:var(--brass)">Have an invite code?</a></p>`) : ''}
     <button class="primary block" style="margin-top:18px">${reg ? 'Create account' : 'Log in'}</button></form></main>`;
 }
 
@@ -1082,7 +1094,8 @@ document.addEventListener('submit', async (e) => {
   e.preventDefault();
   const reg = ui.authMode === 'register';
   try {
-    await api('POST', reg ? '/api/register' : '/api/login', { username: $('#u').value, password: $('#pw').value, name: $('#n')?.value, invite: $('#inv')?.value, homie: ui.homieCode || undefined });
+    const r = await api('POST', reg ? '/api/register' : '/api/login', { username: $('#u').value, password: $('#pw').value, name: $('#n')?.value, invite: $('#inv')?.value || undefined, homie: ui.homieCode || undefined });
+    if (r.pending) { ui.signedUp = $('#n')?.value || $('#u').value; ui.homieCode = null; if (location.hash.startsWith('#/homie')) location.hash = '#/'; render(); return; }
     if (!reg && ui.homieCode) { const c = ui.homieCode; ui.homieCode = null; await refresh(false); await linkHomie(c); }
     ui.homieCode = null; if (location.hash.startsWith('#/homie')) location.hash = '#/';
     await refresh(); syncPush();
@@ -1111,7 +1124,12 @@ document.addEventListener('click', async (e) => {
   try {
     if (handlers[act]) { await handlers[act](el, seg); return; }
     switch (act) {
-      case 'auth-mode': ui.authMode = v; render(); break;
+      case 'auth-mode': ui.authMode = v; ui.signedUp = null; render(); break;
+      case 'auth-invite': e.preventDefault(); ui.showInvite = true; render(); break;
+      case 'signup': {
+        const r = await api('POST', `/api/admin/signups/${el.dataset.id}`, { approve: v === '1' });
+        ui.signups = null; if (r.approved) await refresh(false); render(); toast(r.approved ? `${r.name} is in` : `${r.name} was declined`); break;
+      }
       case 'toggle-past': ui.showPast = !ui.showPast; render(); break;
       case 'push-on': await enablePush(); break;
       case 'push-test': { const r = await api('POST', '/api/push/test', {}); toast(r.sent ? 'Sent. It should pop up in a few seconds.' : 'No device is connected yet'); break; }
@@ -1315,7 +1333,7 @@ setInterval(async () => {
 
 // ---------- start ----------
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
-navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.go) { const h = e.data.go.replace(/^\//, ''); location.hash = h.startsWith('#') ? h : '#/'; refresh(); } });
+navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.go) { ui.signups = null; const h = e.data.go.replace(/^\//, ''); location.hash = h.startsWith('#') ? h : '#/'; refresh(); } });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
 window.addEventListener('DOMContentLoaded', async () => {

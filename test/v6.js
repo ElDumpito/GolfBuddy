@@ -76,6 +76,8 @@ const IMG = 'data:image/jpeg;base64,' + Buffer.from('not really a jpeg').toStrin
   assert.ok((await call('ck', 'GET', `/api/rounds/${round.id}`)).data.round.scores.every((s) => !s.strokes.some(Boolean)));
   // Someone not on the round can't read against it.
   await call('tam', 'POST', '/api/register', { username: 'tam', password: 'secret1', name: 'Tammer', homie: (await call('ck', 'GET', '/api/homies/code')).data.code });
+  await call('ck', 'POST', `/api/admin/signups/${(await call('ck', 'GET', '/api/admin/signups')).data.signups[0].id}`, { approve: true });
+  await call('tam', 'POST', '/api/login', { username: 'tam', password: 'secret1' });
   assert.strictEqual((await call('tam', 'POST', '/api/read', { kind: 'scorecard', image: IMG, roundId: round.id })).status, 404);
 
   // Garbage in: a bad image or a reply with no JSON are errors, not crashes.

@@ -784,6 +784,20 @@ async function api(req, res, url, me) {
   }
 
   if (seg[1] === 'admin' && me.is_admin) {
+    if (seg[2] === 'signups') {
+      if (m === 'POST' && seg[3]) {
+        const u = db.userById(Number(seg[3]));
+        if (!u || u.status !== 'pending') return bad('Already handled', 404);
+        if (body.approve) {
+          db.approveUser(u.id);
+          const via = u.via && db.userById(u.via);
+          if (via && via.status === 'active') db.link(u.id, via.id);
+          db.link(u.id, me.id);
+        } else db.declineUser(u.id);
+        return send(res, 200, { ok: true, name: u.name, approved: !!body.approve });
+      }
+      return send(res, 200, { signups: db.pendingUsers().map((u) => ({ ...u, viaName: u.via ? db.userById(u.via)?.name || null : null })) });
+    }
     if (seg[2] === 'keys') {
       // Keys are write-only: the page shows whether each is set and its last 4 characters, never the key.
       if (m === 'POST') {
@@ -822,11 +836,25 @@ async function handle(req, res) {
         const username = str(b.username, 24);
         if (!/^[A-Za-z0-9_.-]{2,24}$/.test(username)) return send(res, 400, { error: 'Username: 2 to 24 letters or numbers' });
         if (String(b.password || '').length < 6) return send(res, 400, { error: 'Password needs at least 6 characters' });
-        // Either the group invite code, or a Homie's QR code (which links you with them).
-        const via = db.userByHomieCode(b.homie);
-        if (!via && String(b.invite || '').trim() !== INVITE) return send(res, 403, { error: 'Wrong invite code' });
+        // Anyone can ask for an account; an admin approves it from a push notification (or Me › Admin).
+        // The very first account is the admin. The invite code, if someone has it, skips the wait.
+        // Signing up from a Homie's QR code links the two of you once approved.
         if (db.userByName(username)) return send(res, 409, { error: 'That username is taken' });
-        const u = db.createUser(username, String(b.password), str(b.name, 30) || username, db.userCount() === 0);
+        const first = db.userCount() === 0;
+        const invited = !!b.invite && String(b.invite).trim() === INVITE;
+        const via = db.userByHomieCode(b.homie);
+        if (b.invite && !invited) return send(res, 403, { error: 'Wrong invite code' });
+        if (!first && !invited) {
+          if (db.pendingUsers().length >= 10) return send(res, 429, { error: 'Too many sign-ups waiting. Try again later.' });
+          const u = db.createUser(username, String(b.password), str(b.name, 30) || username, false, true, via?.id || null);
+          const who = `${u.name}${u.name.toLowerCase() !== username.toLowerCase() ? ` (@${username})` : ''}`;
+          const admins = db.allUsersRaw().filter((x) => x.is_admin).map((x) => x.id);
+          await notify(admins, { title: 'New sign-up', body: `${who} wants in${via ? ` (from ${via.name}'s code)` : ''}. Approve?`,
+            tag: `signup-${u.id}`, requireInteraction: true, url: '/#/me', signupId: u.id,
+            actions: [{ action: 'approve', title: '✅ Approve' }, { action: 'decline', title: '❌ Decline' }] });
+          return send(res, 200, { pending: true });
+        }
+        const u = db.createUser(username, String(b.password), str(b.name, 30) || username, first);
         if (via) db.link(u.id, via.id);
         else for (const a of db.allUsersRaw().filter((x) => x.is_admin && x.id !== u.id)) db.link(u.id, a.id);
         return send(res, 200, { me: db.pubUser(u) }, { 'Set-Cookie': sessionCookie(req, db.createSession(u.id)) });
@@ -836,6 +864,7 @@ async function handle(req, res) {
         const b = await readJson(req);
         const u = db.userByName(str(b.username, 24));
         if (!u || !db.checkPassword(String(b.password || ''), u.pass)) return send(res, 401, { error: 'Wrong username or password' });
+        if (u.status === 'pending') return send(res, 403, { error: 'Your account is waiting for approval. Try again once you hear back.' });
         return send(res, 200, { me: db.pubUser(u) }, { 'Set-Cookie': sessionCookie(req, db.createSession(u.id)) });
       }
       if (p === '/api/inbound' && req.method === 'POST') {

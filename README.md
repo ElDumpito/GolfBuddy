@@ -95,8 +95,7 @@ One-time setup:
 ## Homies
 
 Each person has a QR code (Me › Homies › My code) that links whoever scans it, with a phone camera or the in-app scanner.
-Someone new can sign up from it without the invite code, but Cloudflare Access still has to let their email in first
-(Zero Trust › Access › the GolfHomie app's policy). You only see your Homies, the tee times and rounds you're on, and
+Someone new can sign up from it; like any sign-up, it waits for an admin to approve it. You only see your Homies, the tee times and rounds you're on, and
 money you're part of; who-owes-who is counted pair by pair. Everyone who used the app before Homies were linked once at upgrade.
 `public/vendor/qrcode.js` is qrcode-generator 2.0.4 (MIT, Kazuhiko Arase).
 
@@ -107,3 +106,10 @@ phone, sent to Anthropic's Claude (`claude-sonnet-5-5`, change with `ANTHROPIC_M
 and shown to you to confirm. Nothing is saved until you tap to fill it in. It's off until an Anthropic API key is pasted in
 Me › Admin (console.anthropic.com › API keys; add a few dollars of credit and a monthly spend limit). Each person can read 40
 photos a day. The Player Card scan tries the card's barcode on the phone first, which is free and needs no key.
+
+## Sign-ups and approval
+
+Anyone who reaches the site can create an account with a username and password, but it stays *waiting* until an admin
+approves it: admins get a push notification with Approve / Decline buttons (or use the list at the top of Me). A waiting
+account can't log in. Declining deletes it. At most 10 can wait at once. The invite code (Me › Admin) skips the wait for
+someone you've already said yes to. The very first account on a fresh install is the admin.

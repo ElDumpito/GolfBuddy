@@ -12,10 +12,10 @@ Shared tee times, who-owes-who and scorecards for a couple of golf buddies. One 
 The app joins the `boker-tunnel_default` network, so `boker-tunnel` must be running. Every push to `main` runs the tests and publishes `ghcr.io/eldumpito/golfbuddy`.
 
 1. **Let the NAS pull the image.** GitHub › your profile › Packages › `golfbuddy` › Package settings › Change visibility › Public (the code stays private; the image holds no secrets). Or add a `read:packages` token under Container Station › Registries.
-2. **Cloudflare tunnel.** GolfBuddy rides on the poker app's tunnel (`boker`, whose connector runs as the `boker-tunnel` application), so there is no new token or connector. Zero Trust › Networks › Tunnels › `boker` › Public hostnames › Add: `golf.juno.nexus` → HTTP → `golfbuddy:8790`.
-3. **Login wall.** Zero Trust › Access › Applications › Add › Self-hosted, name "GolfBuddy", domain `golf.juno.nexus`, a policy allowing your email and your buddy's. Set the session duration to 1 month so the installed app and notification taps do not keep bouncing to the login page.
+2. **Cloudflare tunnel.** GolfBuddy rides on the poker app's tunnel (`boker`, whose connector runs as the `boker-tunnel` application), so there is no new token or connector. Zero Trust › Networks › Tunnels › `boker` › Public hostnames › Add: `golfhomie.app` → HTTP → `golfbuddy:8790`.
+3. **Login wall.** Zero Trust › Access › Applications › Add › Self-hosted, name "GolfBuddy", domain `golfhomie.app`, a policy allowing your email and your buddy's. Set the session duration to 1 month so the installed app and notification taps do not keep bouncing to the login page.
 4. **The app.** Container Station › Applications › Create, name `golfbuddy`, paste `docker-compose.yml`. Optionally set `INVITE_CODE`; left as `change-me`, one is generated (container log, and Me › Admin). Container Station rejects `mem_limit` in the file; set limits under Advanced Settings if wanted.
-5. Open `https://golf.juno.nexus`, **Create account** first (that account is the admin), then send your buddy the invite code.
+5. Open `https://golfhomie.app`, **Create account** first (that account is the admin), then send your buddy the invite code.
 
 On each phone: open the site in Chrome › ⋮ › **Add to Home screen / Install app**, then **Turn on** notifications. Installing also puts GolfBuddy in Android's Share menu: in Gmail, long-press the email text › Select all › Share › GolfBuddy.
 
@@ -43,7 +43,7 @@ OpenGolfAPI (© OpenStreetMap contributors, ODbL) and were spot-checked against 
 rebuilds `server/course-data.json`.
 
 **Keys** are pasted in Me › Admin (admin only), stored in the NAS database and never sent back to the app except the browser key
-(which only works on golf.juno.nexus). Nothing in docker-compose.
+(which only works on golfhomie.app). Nothing in docker-compose.
 - Google server key: Routes API + Places API (New). Leave-by times, ranges & simulators within 30 miles, address lookups.
 - Google browser key: Maps JavaScript API. The satellite map in shot tracking. Without it a simple drawing is shown.
 - Twilio Account SID, Auth Token and phone number: wake-up phone calls. Without them the wake-up is a push notification.
@@ -84,9 +84,9 @@ Forward a confirmation to `bookings@juno.nexus` and it becomes a tee time (a can
 One-time setup:
 1. Cloudflare › juno.nexus › **Email › Email Routing** › Enable (it adds the MX/TXT records; juno.nexus had no mail before).
 2. **Workers & Pages** › Create Worker `golfhomie-mail`, paste `deploy/email-worker.js`, Deploy. Settings › Variables:
-   `GOLFHOMIE_URL` = `https://golf.juno.nexus`; Secret `INBOUND_KEY` = GolfHomie › Me › Admin › Bookings by email › Copy worker key.
+   `GOLFHOMIE_URL` = `https://golfhomie.app`; Secret `INBOUND_KEY` = GolfHomie › Me › Admin › Bookings by email › Copy worker key.
 3. Email Routing › Routing rules › Create address `bookings` › action **Send to a Worker** › `golfhomie-mail`.
-4. Zero Trust › Access › Applications › Add self-hosted app `GolfHomie inbound`: domain `golf.juno.nexus`, path `api/inbound`,
+4. Zero Trust › Access › Applications › Add self-hosted app `GolfHomie inbound`: domain `golfhomie.app`, path `api/inbound`,
    policy **Bypass / Everyone**. (The key is what protects this path.)
 5. Gmail › Settings › Forwarding › Add `bookings@juno.nexus`. Gmail's code shows up in GolfHomie (push + Admin). Then a filter:
    `from:(alerts@teetimeinfo.com OR golfnow.com OR foreup)` › Forward to `bookings@juno.nexus`.
@@ -114,5 +114,5 @@ approves it: admins get a push notification with Approve / Decline buttons (or u
 account can't log in. Declining deletes it. At most 10 can wait at once. The invite code (Me › Admin) skips the wait for
 someone you've already said yes to. The very first account on a fresh install is the admin.
 
-On golf.juno.nexus, Cloudflare Access still sits in front: its "GolfHomie sign-ups (anyone with an email)" policy lets anyone
+On golfhomie.app, Cloudflare Access still sits in front: its "GolfHomie sign-ups (anyone with an email)" policy lets anyone
 through after a one-time email code, so bots never reach the app, and the app's own approval decides who gets in.

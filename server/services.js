@@ -8,7 +8,7 @@
 const db = require('./db');
 const { miles } = require('./geo');
 
-const UA = `GolfHomie (${process.env.PUBLIC_URL || 'golf.juno.nexus'})`;
+const UA = `GolfHomie (${process.env.PUBLIC_URL || 'golfhomie.app'})`;
 const MIN = 60000, HOUR = 3600000;
 
 // Every outside call goes through here: a timeout, and errors as exceptions with the service name.

@@ -14,7 +14,7 @@ services:
       # Needed to create an account. Left as "change-me", the server makes one up and prints it in the container log
       # (it also shows under Me > Admin for the first account).
       - INVITE_CODE=change-me
-      - PUBLIC_URL=https://golf.juno.nexus
+      - PUBLIC_URL=https://golfhomie.app
       # How many hours before free cancellation ends the "still in?" notification goes out.
       - REMIND_HOURS=12
       - TZ=America/Los_Angeles

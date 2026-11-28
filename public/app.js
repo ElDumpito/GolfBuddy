@@ -142,8 +142,17 @@ function frame({ title, back, right = '', body, tab, wordmark }) {
   const tabs = [['tee', '#/', 'flag', 'Tee times'], ['money', '#/money', 'wallet', 'Money'], ['scores', '#/scores', 'card', 'Rounds'], ['me', '#/me', 'user', 'Me']];
   return `<header class="top">${back ? `<a class="btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
     ${wordmark ? `<span class="wordmark grow">Golf<b>Homie</b></span>` : `<h1 class="grow">${esc(title)}</h1>`}${right}</header>
-  <main class="page">${body}</main>
+  <main class="page">${movedBanner()}${body}</main>
   <nav class="nav">${tabs.map(([k, h, i, l]) => `<a href="${h}" class="${tab === k ? 'on' : ''}">${icon(i)}${l}</a>`).join('')}</nav>`;
+}
+// GolfHomie's permanent address is golfhomie.app. The old one still works, but phones keep their
+// login, home-screen icon and notifications per address, so each person has to switch over once.
+const NEW_HOME = 'golfhomie.app';
+function movedBanner() {
+  if (location.hostname === NEW_HOME || /^(localhost|127\.|192\.168\.)/.test(location.hostname)) return '';
+  return `<section class="card" style="border-color:var(--brass)"><h2>GolfHomie moved to ${NEW_HOME}</h2>
+    <p class="small-text dim" style="margin:6px 0 10px">Same app, same account. Open the new address, log in, add it to your Home screen and turn notifications on there. Then you can delete the old icon.</p>
+    <a class="btn primary block" href="https://${NEW_HOME}/" target="_blank" rel="noopener">Open ${NEW_HOME}</a></section>`;
 }
 function balanceChip() {
   const b = myBalance();
@@ -976,7 +985,7 @@ function viewAdmin() {
     <div class="over" style="margin:20px 0 0">Service keys</div>
     <p class="tiny faint" style="margin:6px 0 0">Pasted here, stored on the NAS and never shown again (only the last 4 characters). Leave a box empty to keep what's there.</p>
     ${row('google_server_key', 'Google server key', 'Routes API + Places API (New)', 'password')}
-    ${row('google_browser_key', 'Google browser key', 'Maps JavaScript API, limited to golf.juno.nexus/*', 'password')}
+    ${row('google_browser_key', 'Google browser key', 'Maps JavaScript API, limited to golfhomie.app/*', 'password')}
     ${row('twilio_sid', 'Twilio Account SID', 'AC…')}
     ${row('twilio_token', 'Twilio Auth Token', '', 'password')}
     ${row('twilio_from', 'Twilio phone number', '+13105550123')}
